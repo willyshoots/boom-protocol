@@ -99,7 +99,7 @@ Nobody knows the number. Not the AI launcher. Not us. Nobody.
 - [x] Presale system (deposit, lottery, refund)
 - [ ] Switchboard VRF integration
 - [ ] LP creation with Raydium
-- [ ] Price monitoring bot
+- [x] Price monitoring bot
 - [ ] Crash-style frontend
 - [ ] Deploy to devnet
 
