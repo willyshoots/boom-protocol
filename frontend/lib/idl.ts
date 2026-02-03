@@ -43,6 +43,28 @@ export interface UserDeposit {
   bump: number;
 }
 
+export interface BoomToken {
+  mint: PublicKey;
+  name: number[];
+  symbol: number[];
+  creator: PublicKey;
+  createdAt: BN;
+  capHash: number[];
+  revealedCap: BN;
+  isExploded: boolean;
+  explosionTime: BN;
+  explosionDeadline: BN;
+  explosionReason: ExplosionReason;
+  totalPayout: BN;
+  bump: number;
+}
+
+export enum ExplosionReason {
+  None = 0,
+  CapHit = 1,
+  TimeLimit = 2,
+}
+
 // Config types
 export interface ProtocolConfig {
   minCap: BN;
@@ -169,6 +191,27 @@ export const IDL = {
         { name: 'tokensPerWinner', type: 'u64' },
       ],
     },
+    {
+      name: 'setTimeLimit',
+      discriminator: [127, 55, 5, 194, 113, 148, 167, 215],
+      accounts: [
+        { name: 'boomToken', writable: true },
+        { name: 'authority', signer: true },
+      ],
+      args: [
+        { name: 'deadline', type: 'i64' },
+      ],
+    },
+    {
+      name: 'triggerTimeExplosion',
+      discriminator: [45, 186, 214, 16, 163, 206, 215, 55],
+      accounts: [
+        { name: 'boomToken', writable: true },
+        { name: 'protocol', writable: true },
+        { name: 'caller', signer: true },
+      ],
+      args: [],
+    },
   ],
   accounts: [
     {
@@ -186,6 +229,10 @@ export const IDL = {
     {
       name: 'presaleToken',
       discriminator: [154, 81, 120, 23, 104, 12, 70, 176],
+    },
+    {
+      name: 'boomToken',
+      discriminator: [57, 59, 212, 151, 150, 191, 255, 2],
     },
   ],
   types: [
@@ -263,6 +310,38 @@ export const IDL = {
         ],
       },
     },
+    {
+      name: 'boomToken',
+      type: {
+        kind: 'struct',
+        fields: [
+          { name: 'mint', type: 'pubkey' },
+          { name: 'name', type: { array: ['u8', 32] } },
+          { name: 'symbol', type: { array: ['u8', 8] } },
+          { name: 'creator', type: 'pubkey' },
+          { name: 'createdAt', type: 'i64' },
+          { name: 'capHash', type: { array: ['u8', 32] } },
+          { name: 'revealedCap', type: 'u64' },
+          { name: 'isExploded', type: 'bool' },
+          { name: 'explosionTime', type: 'i64' },
+          { name: 'explosionDeadline', type: 'i64' },
+          { name: 'explosionReason', type: { defined: { name: 'explosionReason' } } },
+          { name: 'totalPayout', type: 'u64' },
+          { name: 'bump', type: 'u8' },
+        ],
+      },
+    },
+    {
+      name: 'explosionReason',
+      type: {
+        kind: 'enum',
+        variants: [
+          { name: 'None' },
+          { name: 'CapHit' },
+          { name: 'TimeLimit' },
+        ],
+      },
+    },
   ],
   errors: [
     { code: 6000, name: 'alreadyExploded', msg: 'Token has already exploded' },
@@ -282,6 +361,10 @@ export const IDL = {
     { code: 6014, name: 'nothingToRefund', msg: 'Nothing to refund' },
     { code: 6015, name: 'notAWinner', msg: 'Not a lottery winner' },
     { code: 6016, name: 'invalidMint', msg: 'Invalid mint for this presale' },
+    { code: 6017, name: 'deadlineInPast', msg: 'Deadline must be in the future' },
+    { code: 6018, name: 'deadlineAlreadySet', msg: 'Deadline has already been set' },
+    { code: 6019, name: 'noDeadlineSet', msg: 'No deadline has been set for this token' },
+    { code: 6020, name: 'deadlineNotReached', msg: 'Deadline has not been reached yet' },
   ],
 } as const;
 
@@ -317,6 +400,13 @@ export function getPresaleTokenPDA(roundId: BN): [PublicKey, number] {
 export function getMintAuthorityPDA(roundId: BN): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from('mint_authority'), roundId.toArrayLike(Buffer, 'le', 8)],
+    PROGRAM_ID
+  );
+}
+
+export function getBoomTokenPDA(mint: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('boom_token'), mint.toBuffer()],
     PROGRAM_ID
   );
 }
