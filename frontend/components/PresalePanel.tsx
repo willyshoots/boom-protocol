@@ -5,6 +5,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { usePresale } from '../hooks/usePresale';
 import { useTokenClaim } from '../hooks/useTokenClaim';
+import { FundingCountdown } from './CountdownTimer';
 
 interface PresalePanelProps {
   roundId?: number;
@@ -129,9 +130,14 @@ export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1 }) => {
         </div>
       ) : (
         <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
-          <p className="text-green-400 text-sm">
-            ✅ Presale is LIVE! Ends: {endTime.toLocaleString()}
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-green-400 text-sm">✅ Presale is LIVE!</p>
+            <FundingCountdown 
+              endTime={endTime} 
+              className="text-lg font-bold"
+              onComplete={refresh}
+            />
+          </div>
         </div>
       )}
 
