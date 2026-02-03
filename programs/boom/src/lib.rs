@@ -618,24 +618,90 @@ pub mod boom {
         Ok(())
     }
 
+    /// Unwind LP after explosion - burns LP tokens, extracts SOL
+    /// Called by authority after explosion triggers
+    pub fn unwind_lp(
+        ctx: Context<UnwindLp>,
+        total_sol_extracted: u64,
+        remaining_token_supply: u64,
+    ) -> Result<()> {
+        let explosion = &mut ctx.accounts.presale_explosion;
+        require!(explosion.is_exploded, BoomError::NotExploded);
+        require!(explosion.total_sol_for_payout == 0, BoomError::LpAlreadyUnwound);
+
+        // Record payout pool info
+        // In production, this would CPI to Raydium to actually unwind
+        // For hackathon, authority reports the amounts after off-chain unwind
+        explosion.total_sol_for_payout = total_sol_extracted;
+
+        // Initialize payout tracking
+        let payout_pool = &mut ctx.accounts.payout_pool;
+        payout_pool.round_id = explosion.round_id;
+        payout_pool.total_sol = total_sol_extracted;
+        payout_pool.remaining_supply = remaining_token_supply;
+        payout_pool.claimed_count = 0;
+        payout_pool.bump = ctx.bumps.payout_pool;
+
+        emit!(LpUnwound {
+            round_id: explosion.round_id,
+            total_sol: total_sol_extracted,
+            remaining_supply: remaining_token_supply,
+        });
+
+        Ok(())
+    }
+
     /// Claim payout after explosion
-    /// Token holders can claim their proportional share of SOL
+    /// Token holders burn their tokens and receive proportional SOL
     pub fn claim_explosion_payout(
         ctx: Context<ClaimExplosionPayout>,
     ) -> Result<()> {
         let explosion = &ctx.accounts.presale_explosion;
-        require!(explosion.is_exploded, BoomError::NotExploded);
+        let payout_pool = &mut ctx.accounts.payout_pool;
+        let user_token_account = &ctx.accounts.user_token_account;
 
-        // TODO: Implement proportional payout based on token holdings
-        // This requires:
-        // 1. Reading user's token balance
-        // 2. Calculating their share of total supply
-        // 3. Transferring proportional SOL from LP/treasury
+        require!(explosion.is_exploded, BoomError::NotExploded);
+        require!(payout_pool.total_sol > 0, BoomError::LpNotUnwound);
+
+        // Get user's token balance
+        let user_tokens = user_token_account.amount;
+        require!(user_tokens > 0, BoomError::NoTokensToClaim);
+
+        // Calculate proportional payout
+        // payout = (user_tokens / remaining_supply) * total_sol
+        let payout_amount = (user_tokens as u128)
+            .checked_mul(payout_pool.total_sol as u128)
+            .ok_or(BoomError::Overflow)?
+            .checked_div(payout_pool.remaining_supply as u128)
+            .ok_or(BoomError::Overflow)? as u64;
+
+        require!(payout_amount > 0, BoomError::PayoutTooSmall);
+
+        // Transfer SOL from payout vault to user
+        let payout_vault = &ctx.accounts.payout_vault;
+        let user = &ctx.accounts.user;
+
+        **payout_vault.to_account_info().try_borrow_mut_lamports()? -= payout_amount;
+        **user.to_account_info().try_borrow_mut_lamports()? += payout_amount;
+
+        // Burn user's tokens
+        let burn_accounts = token_2022::Burn {
+            mint: ctx.accounts.mint.to_account_info(),
+            from: ctx.accounts.user_token_account.to_account_info(),
+            authority: ctx.accounts.user.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            burn_accounts,
+        );
+        token_2022::burn(cpi_ctx, user_tokens)?;
+
+        payout_pool.claimed_count += 1;
 
         emit!(PayoutClaimed {
             round_id: explosion.round_id,
             user: ctx.accounts.user.key(),
-            amount: 0, // Placeholder
+            amount: payout_amount,
         });
 
         Ok(())
@@ -1015,6 +1081,38 @@ pub struct TriggerPresaleExplosionTime<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(total_sol_extracted: u64, remaining_token_supply: u64)]
+pub struct UnwindLp<'info> {
+    #[account(
+        seeds = [b"presale", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = presale_round.bump,
+        has_one = authority
+    )]
+    pub presale_round: Account<'info, PresaleRound>,
+
+    #[account(
+        mut,
+        seeds = [b"presale_explosion", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = presale_explosion.bump
+    )]
+    pub presale_explosion: Account<'info, PresaleExplosion>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + PayoutPool::INIT_SPACE,
+        seeds = [b"payout_pool", presale_round.round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub payout_pool: Account<'info, PayoutPool>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct ClaimExplosionPayout<'info> {
     #[account(
         seeds = [b"presale_explosion", presale_explosion.round_id.to_le_bytes().as_ref()],
@@ -1022,9 +1120,37 @@ pub struct ClaimExplosionPayout<'info> {
     )]
     pub presale_explosion: Account<'info, PresaleExplosion>,
 
+    #[account(
+        mut,
+        seeds = [b"payout_pool", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump = payout_pool.bump
+    )]
+    pub payout_pool: Account<'info, PayoutPool>,
+
+    /// Vault holding SOL for payouts
+    /// CHECK: PDA that holds the extracted SOL
+    #[account(
+        mut,
+        seeds = [b"payout_vault", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub payout_vault: UncheckedAccount<'info>,
+
+    /// User's token account
+    #[account(
+        mut,
+        token::authority = user,
+    )]
+    pub user_token_account: InterfaceAccount<'info, TokenAccountInterface>,
+
+    /// The token mint
+    #[account(mut)]
+    pub mint: InterfaceAccount<'info, MintInterface>,
+
     #[account(mut)]
     pub user: Signer<'info>,
 
+    pub token_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
 }
 
@@ -1130,6 +1256,16 @@ pub struct LpInfo {
     pub vault_a: Pubkey,            // 32 (SOL vault)
     pub vault_b: Pubkey,            // 32 (Token vault)
     pub registered_at: i64,         // 8
+    pub bump: u8,                   // 1
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct PayoutPool {
+    pub round_id: u64,              // 8
+    pub total_sol: u64,             // 8 - Total SOL for distribution
+    pub remaining_supply: u64,      // 8 - Token supply after LP burn
+    pub claimed_count: u32,         // 4 - Number of claims made
     pub bump: u8,                   // 1
 }
 
@@ -1254,6 +1390,13 @@ pub struct PythPriceUsed {
     pub exponent: i32,
 }
 
+#[event]
+pub struct LpUnwound {
+    pub round_id: u64,
+    pub total_sol: u64,
+    pub remaining_supply: u64,
+}
+
 // ==================== ERRORS ====================
 
 #[error_code]
@@ -1308,4 +1451,12 @@ pub enum BoomError {
     NotExploded,
     #[msg("Price data is stale or unavailable")]
     PriceStale,
+    #[msg("LP has already been unwound")]
+    LpAlreadyUnwound,
+    #[msg("LP has not been unwound yet")]
+    LpNotUnwound,
+    #[msg("No tokens to claim payout")]
+    NoTokensToClaim,
+    #[msg("Payout amount too small")]
+    PayoutTooSmall,
 }
