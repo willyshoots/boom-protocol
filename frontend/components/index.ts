@@ -6,3 +6,5 @@ export { RecentExplosions } from './RecentExplosions';
 export { PresalePanel } from './PresalePanel';
 export { Header } from './Header';
 export { ExplosionOverlay } from './ExplosionOverlay';
+export { WalletButton } from './WalletButton';
+export { WalletNotInstalled } from './WalletNotInstalled';

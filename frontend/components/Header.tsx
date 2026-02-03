@@ -1,8 +1,8 @@
 'use client';
 
 import { FC } from 'react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { BoomLogo } from './BoomLogo';
+import { WalletButton } from './WalletButton';
 
 interface HeaderProps {
   isLive: boolean;
@@ -25,7 +25,7 @@ export const Header: FC<HeaderProps> = ({ isLive, currentTokenSymbol }) => {
             </div>
           </div>
 
-          {/* Status badge */}
+          {/* Status badge - hidden on mobile */}
           <div className="hidden md:flex items-center gap-4">
             {isLive && currentTokenSymbol ? (
               <div className="flex items-center gap-2 px-4 py-2 bg-green-500/20 border border-green-500/30 rounded-full">
@@ -40,8 +40,8 @@ export const Header: FC<HeaderProps> = ({ isLive, currentTokenSymbol }) => {
             )}
           </div>
 
-          {/* Wallet */}
-          <WalletMultiButton />
+          {/* Wallet Button */}
+          <WalletButton />
         </div>
       </div>
     </header>
