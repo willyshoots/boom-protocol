@@ -64,7 +64,60 @@ pub mod boom {
         boom_token.is_exploded = true;
         boom_token.explosion_time = Clock::get()?.unix_timestamp;
         boom_token.revealed_cap = revealed_cap;
+        boom_token.explosion_reason = ExplosionReason::CapHit;
         protocol.total_explosions += 1;
+        
+        emit!(TokenExploded {
+            mint: boom_token.mint,
+            reason: ExplosionReason::CapHit,
+            revealed_cap: Some(revealed_cap),
+            explosion_time: boom_token.explosion_time,
+        });
+        
+        Ok(())
+    }
+
+    /// Set the time limit for a boom token (deadline after which it explodes automatically)
+    pub fn set_time_limit(ctx: Context<SetTimeLimit>, deadline: i64) -> Result<()> {
+        let boom_token = &mut ctx.accounts.boom_token;
+        let clock = Clock::get()?;
+        
+        require!(!boom_token.is_exploded, BoomError::AlreadyExploded);
+        require!(deadline > clock.unix_timestamp, BoomError::DeadlineInPast);
+        require!(boom_token.explosion_deadline == 0, BoomError::DeadlineAlreadySet);
+        
+        boom_token.explosion_deadline = deadline;
+        
+        emit!(TimeLimitSet {
+            mint: boom_token.mint,
+            deadline,
+        });
+        
+        Ok(())
+    }
+
+    /// Trigger explosion due to time limit - anyone can call once deadline passes
+    pub fn trigger_time_explosion(ctx: Context<TriggerTimeExplosion>) -> Result<()> {
+        let boom_token = &mut ctx.accounts.boom_token;
+        let protocol = &mut ctx.accounts.protocol;
+        let clock = Clock::get()?;
+        
+        require!(!boom_token.is_exploded, BoomError::AlreadyExploded);
+        require!(boom_token.explosion_deadline > 0, BoomError::NoDeadlineSet);
+        require!(clock.unix_timestamp >= boom_token.explosion_deadline, BoomError::DeadlineNotReached);
+        
+        boom_token.is_exploded = true;
+        boom_token.explosion_time = clock.unix_timestamp;
+        boom_token.explosion_reason = ExplosionReason::TimeLimit;
+        protocol.total_explosions += 1;
+        
+        emit!(TokenExploded {
+            mint: boom_token.mint,
+            reason: ExplosionReason::TimeLimit,
+            revealed_cap: None,
+            explosion_time: boom_token.explosion_time,
+        });
+        
         Ok(())
     }
 
@@ -379,6 +432,23 @@ pub struct TriggerExplosion<'info> {
     pub trigger_authority: Signer<'info>,
 }
 
+#[derive(Accounts)]
+pub struct SetTimeLimit<'info> {
+    #[account(mut, seeds = [b"boom_token", boom_token.mint.as_ref()], bump = boom_token.bump)]
+    pub boom_token: Account<'info, BoomToken>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct TriggerTimeExplosion<'info> {
+    #[account(mut, seeds = [b"boom_token", boom_token.mint.as_ref()], bump = boom_token.bump)]
+    pub boom_token: Account<'info, BoomToken>,
+    #[account(mut, seeds = [b"protocol"], bump = protocol.bump)]
+    pub protocol: Account<'info, Protocol>,
+    /// CHECK: Anyone can trigger once deadline passes
+    pub caller: Signer<'info>,
+}
+
 // ==================== PRESALE ACCOUNT CONTEXTS ====================
 
 #[derive(Accounts)]
@@ -581,8 +651,18 @@ pub struct BoomToken {
     pub revealed_cap: u64,
     pub is_exploded: bool,
     pub explosion_time: i64,
+    pub explosion_deadline: i64,        // Time limit - explodes if this passes
+    pub explosion_reason: ExplosionReason, // Why it exploded
     pub total_payout: u64,
     pub bump: u8,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExplosionReason {
+    #[default]
+    None,
+    CapHit,      // Secret market cap was reached
+    TimeLimit,   // Time ran out
 }
 
 // ==================== PRESALE ACCOUNTS ====================
@@ -691,6 +771,20 @@ pub struct PresaleTokenCreated {
     pub tokens_per_winner: u64,
 }
 
+#[event]
+pub struct TokenExploded {
+    pub mint: Pubkey,
+    pub reason: ExplosionReason,
+    pub revealed_cap: Option<u64>,
+    pub explosion_time: i64,
+}
+
+#[event]
+pub struct TimeLimitSet {
+    pub mint: Pubkey,
+    pub deadline: i64,
+}
+
 // ==================== ERRORS ====================
 
 #[error_code]
@@ -730,4 +824,13 @@ pub enum BoomError {
     NotAWinner,
     #[msg("Invalid mint for this presale")]
     InvalidMint,
+    // Time limit errors
+    #[msg("Deadline must be in the future")]
+    DeadlineInPast,
+    #[msg("Deadline has already been set")]
+    DeadlineAlreadySet,
+    #[msg("No deadline has been set for this token")]
+    NoDeadlineSet,
+    #[msg("Deadline has not been reached yet")]
+    DeadlineNotReached,
 }
