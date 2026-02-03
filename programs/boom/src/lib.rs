@@ -706,6 +706,121 @@ pub mod boom {
 
         Ok(())
     }
+
+    // ==================== ROUND SEQUENCER INSTRUCTIONS ====================
+
+    /// Initialize the round sequencer for automatic round progression
+    pub fn init_round_sequencer(
+        ctx: Context<InitRoundSequencer>,
+        default_cooldown: i64,
+        default_lottery_spots: u32,
+        default_min_deposit: u64,
+        default_max_deposit: u64,
+    ) -> Result<()> {
+        let sequencer = &mut ctx.accounts.sequencer;
+        sequencer.authority = ctx.accounts.authority.key();
+        sequencer.current_round = 0;
+        sequencer.last_explosion_round = 0;
+        sequencer.auto_advance_enabled = true;
+        sequencer.default_cooldown = default_cooldown;
+        sequencer.default_lottery_spots = default_lottery_spots;
+        sequencer.default_min_deposit = default_min_deposit;
+        sequencer.default_max_deposit = default_max_deposit;
+        sequencer.bump = ctx.bumps.sequencer;
+        Ok(())
+    }
+
+    /// Update default parameters for next rounds
+    pub fn update_round_defaults(
+        ctx: Context<UpdateRoundDefaults>,
+        default_cooldown: Option<i64>,
+        default_lottery_spots: Option<u32>,
+        default_min_deposit: Option<u64>,
+        default_max_deposit: Option<u64>,
+        auto_advance_enabled: Option<bool>,
+    ) -> Result<()> {
+        let sequencer = &mut ctx.accounts.sequencer;
+        
+        if let Some(cooldown) = default_cooldown {
+            sequencer.default_cooldown = cooldown;
+        }
+        if let Some(spots) = default_lottery_spots {
+            sequencer.default_lottery_spots = spots;
+        }
+        if let Some(min) = default_min_deposit {
+            sequencer.default_min_deposit = min;
+        }
+        if let Some(max) = default_max_deposit {
+            sequencer.default_max_deposit = max;
+        }
+        if let Some(enabled) = auto_advance_enabled {
+            sequencer.auto_advance_enabled = enabled;
+        }
+
+        emit!(RoundSequencerUpdated {
+            current_round: sequencer.current_round,
+            last_explosion_round: sequencer.last_explosion_round,
+        });
+
+        Ok(())
+    }
+
+    /// Automatically start the next round after an explosion
+    /// Anyone can call this once a round has exploded
+    /// Note: For round 1, use start_presale directly since there's no round 0
+    pub fn auto_start_next_round(
+        ctx: Context<AutoStartNextRound>,
+        new_round_id: u64,
+    ) -> Result<()> {
+        let sequencer = &mut ctx.accounts.sequencer;
+        let previous_explosion = &ctx.accounts.previous_explosion;
+        let clock = Clock::get()?;
+
+        // Verify auto-advance is enabled
+        require!(sequencer.auto_advance_enabled, BoomError::AutoAdvanceDisabled);
+
+        // Verify the previous round exploded (enforced by context constraint)
+        // and this is the correct next round
+        require!(
+            new_round_id == previous_explosion.round_id + 1,
+            BoomError::InvalidRoundSequence
+        );
+
+        // Create the new presale round with default parameters
+        let presale = &mut ctx.accounts.new_presale_round;
+        presale.authority = sequencer.authority;
+        presale.round_id = new_round_id;
+        presale.start_time = clock.unix_timestamp;
+        presale.end_time = clock.unix_timestamp + sequencer.default_cooldown;
+        presale.lottery_spots = sequencer.default_lottery_spots;
+        presale.min_deposit = sequencer.default_min_deposit;
+        presale.max_deposit = sequencer.default_max_deposit;
+        presale.total_deposited = 0;
+        presale.total_depositors = 0;
+        presale.is_finalized = false;
+        presale.bump = ctx.bumps.new_presale_round;
+
+        // Update sequencer state
+        let previous_round = previous_explosion.round_id;
+        sequencer.last_explosion_round = previous_round;
+        sequencer.current_round = new_round_id;
+
+        emit!(NextRoundStarted {
+            previous_round,
+            new_round: new_round_id,
+            auto_advanced: true,
+        });
+
+        emit!(PresaleStarted {
+            round_id: new_round_id,
+            end_time: presale.end_time,
+            lottery_spots: presale.lottery_spots,
+            min_deposit: presale.min_deposit,
+            max_deposit: presale.max_deposit,
+        });
+
+        Ok(())
+    }
 }
 
 // ==================== EXISTING ACCOUNT CONTEXTS ====================
@@ -1154,6 +1269,71 @@ pub struct ClaimExplosionPayout<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// ==================== ROUND SEQUENCER CONTEXTS ====================
+
+#[derive(Accounts)]
+pub struct InitRoundSequencer<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + RoundSequencer::INIT_SPACE,
+        seeds = [b"round_sequencer"],
+        bump
+    )]
+    pub sequencer: Account<'info, RoundSequencer>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateRoundDefaults<'info> {
+    #[account(
+        mut,
+        seeds = [b"round_sequencer"],
+        bump = sequencer.bump,
+        has_one = authority
+    )]
+    pub sequencer: Account<'info, RoundSequencer>,
+
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(new_round_id: u64)]
+pub struct AutoStartNextRound<'info> {
+    #[account(
+        mut,
+        seeds = [b"round_sequencer"],
+        bump = sequencer.bump
+    )]
+    pub sequencer: Account<'info, RoundSequencer>,
+
+    /// Previous round's explosion account - must be exploded
+    #[account(
+        seeds = [b"presale_explosion", (new_round_id - 1).to_le_bytes().as_ref()],
+        bump = previous_explosion.bump,
+        constraint = previous_explosion.is_exploded @ BoomError::NotExploded
+    )]
+    pub previous_explosion: Account<'info, PresaleExplosion>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + PresaleRound::INIT_SPACE,
+        seeds = [b"presale", new_round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub new_presale_round: Account<'info, PresaleRound>,
+
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 // ==================== EXISTING ACCOUNTS ====================
 
 #[account]
@@ -1267,6 +1447,22 @@ pub struct PayoutPool {
     pub remaining_supply: u64,      // 8 - Token supply after LP burn
     pub claimed_count: u32,         // 4 - Number of claims made
     pub bump: u8,                   // 1
+}
+
+/// Manages automatic round progression
+#[account]
+#[derive(InitSpace)]
+pub struct RoundSequencer {
+    pub authority: Pubkey,              // 32
+    pub current_round: u64,             // 8 - active round (0 = none started)
+    pub last_explosion_round: u64,      // 8 - last round that exploded
+    pub auto_advance_enabled: bool,     // 1
+    // Default params for next rounds
+    pub default_cooldown: i64,          // 8
+    pub default_lottery_spots: u32,     // 4
+    pub default_min_deposit: u64,       // 8
+    pub default_max_deposit: u64,       // 8
+    pub bump: u8,                       // 1
 }
 
 // ==================== CONFIG ====================
@@ -1397,6 +1593,19 @@ pub struct LpUnwound {
     pub remaining_supply: u64,
 }
 
+#[event]
+pub struct NextRoundStarted {
+    pub previous_round: u64,
+    pub new_round: u64,
+    pub auto_advanced: bool,
+}
+
+#[event]
+pub struct RoundSequencerUpdated {
+    pub current_round: u64,
+    pub last_explosion_round: u64,
+}
+
 // ==================== ERRORS ====================
 
 #[error_code]
@@ -1459,4 +1668,8 @@ pub enum BoomError {
     NoTokensToClaim,
     #[msg("Payout amount too small")]
     PayoutTooSmall,
+    #[msg("Invalid round sequence - must be next after explosion")]
+    InvalidRoundSequence,
+    #[msg("Auto-advance is disabled")]
+    AutoAdvanceDisabled,
 }
