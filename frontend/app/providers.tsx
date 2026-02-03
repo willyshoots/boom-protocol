@@ -1,17 +1,12 @@
 'use client';
 
-import { FC, ReactNode, useMemo, useCallback } from 'react';
+import { FC, ReactNode, useMemo, useEffect, useState } from 'react';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import { 
-  PhantomWalletAdapter, 
-  SolflareWalletAdapter,
-  TorusWalletAdapter,
-  LedgerWalletAdapter,
-} from '@solana/wallet-adapter-wallets';
-import { WalletError } from '@solana/wallet-adapter-base';
+import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { clusterApiUrl } from '@solana/web3.js';
 
+// Import wallet adapter styles
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 interface ProvidersProps {
@@ -19,41 +14,31 @@ interface ProvidersProps {
 }
 
 export const Providers: FC<ProvidersProps> = ({ children }) => {
-  // Use devnet for development, can be changed via env var
-  const endpoint = useMemo(() => {
-    return process.env.NEXT_PUBLIC_RPC_URL || clusterApiUrl('devnet');
-  }, []);
+  const [ready, setReady] = useState(false);
   
-  // Configure wallets - Phantom is FIRST (primary)
-  const wallets = useMemo(
-    () => [
-      new PhantomWalletAdapter(),      // Primary wallet
-      new SolflareWalletAdapter(),     // Popular alternative
-      new TorusWalletAdapter(),        // Web-based option
-      new LedgerWalletAdapter(),       // Hardware wallet
-    ],
-    []
-  );
+  const endpoint = useMemo(() => clusterApiUrl('devnet'), []);
+  const wallets = useMemo(() => [new PhantomWalletAdapter()], []);
 
-  // Handle wallet errors gracefully
-  const onError = useCallback((error: WalletError) => {
-    console.error('[Wallet Error]', error);
-    
-    // Don't show error for user rejection (they clicked cancel)
-    if (error.name === 'WalletConnectionError') {
-      return;
-    }
-    
-    // Could add toast notification here
+  // Handle client-side polyfills
+  useEffect(() => {
+    import('buffer').then(({ Buffer }) => {
+      window.Buffer = Buffer;
+      setReady(true);
+    });
   }, []);
+
+  // Show loading until polyfills are ready
+  if (!ready) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
+        <div className="text-orange-500 animate-pulse text-xl">Loading...</div>
+      </div>
+    );
+  }
 
   return (
     <ConnectionProvider endpoint={endpoint}>
-      <WalletProvider 
-        wallets={wallets} 
-        autoConnect
-        onError={onError}
-      >
+      <WalletProvider wallets={wallets} autoConnect={false}>
         <WalletModalProvider>
           {children}
         </WalletModalProvider>

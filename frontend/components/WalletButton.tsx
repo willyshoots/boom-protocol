@@ -4,8 +4,16 @@ import { FC, useState, useRef, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 
+// Detect if we're in Phantom's mobile in-app browser
+const isPhantomMobile = () => {
+  if (typeof window === 'undefined') return false;
+  const isPhantomInjected = !!(window as any).phantom?.solana?.isPhantom;
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  return isPhantomInjected && isMobile;
+};
+
 export const WalletButton: FC = () => {
-  const { publicKey, wallet, disconnect, connecting, connected } = useWallet();
+  const { publicKey, wallet, disconnect, connecting, connected, select, wallets, connect } = useWallet();
   const { setVisible } = useWalletModal();
   const [showDropdown, setShowDropdown] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -37,7 +45,30 @@ export const WalletButton: FC = () => {
   };
 
   // Handle connect click
-  const handleConnect = () => {
+  const handleConnect = async () => {
+    // Check for Phantom provider
+    const phantom = (window as any).phantom?.solana || (window as any).solana;
+    
+    if (phantom?.isPhantom) {
+      try {
+        // Direct connect via Phantom API
+        await phantom.connect();
+        // Select Phantom in wallet adapter to sync state
+        const phantomWallet = wallets.find(w => w.adapter.name === 'Phantom');
+        if (phantomWallet) {
+          select(phantomWallet.adapter.name);
+        }
+        return;
+      } catch (e: any) {
+        if (e.code === 4001) {
+          console.log('User rejected connection');
+        } else {
+          console.error('Phantom connect error:', e);
+        }
+      }
+    }
+    
+    // Fallback: show wallet modal for desktop/other wallets
     setVisible(true);
   };
 

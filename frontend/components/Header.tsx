@@ -2,7 +2,7 @@
 
 import { FC } from 'react';
 import { BoomLogo } from './BoomLogo';
-import { WalletButton } from './WalletButton';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 
 interface HeaderProps {
   isLive: boolean;
@@ -41,7 +41,7 @@ export const Header: FC<HeaderProps> = ({ isLive, currentTokenSymbol }) => {
           </div>
 
           {/* Wallet Button */}
-          <WalletButton />
+          <WalletMultiButton className="!bg-gradient-to-r !from-orange-500 !to-red-500 hover:!from-orange-600 hover:!to-red-600 !rounded-xl !font-bold !transition-all hover:!scale-105" />
         </div>
       </div>
     </header>
