@@ -462,6 +462,114 @@ pub mod boom {
 
         Ok(())
     }
+
+    // ==================== PRESALE EXPLOSION ====================
+
+    /// Initialize explosion tracking for a presale token
+    /// Sets the secret cap hash and optional time limit
+    pub fn init_presale_explosion(
+        ctx: Context<InitPresaleExplosion>,
+        round_id: u64,
+        cap_hash: [u8; 32],
+        explosion_deadline: i64,
+    ) -> Result<()> {
+        let presale = &ctx.accounts.presale_round;
+        require!(presale.is_finalized, BoomError::PresaleNotFinalized);
+
+        let explosion = &mut ctx.accounts.presale_explosion;
+        explosion.round_id = round_id;
+        explosion.cap_hash = cap_hash;
+        explosion.revealed_cap = 0;
+        explosion.explosion_deadline = explosion_deadline;
+        explosion.is_exploded = false;
+        explosion.explosion_time = 0;
+        explosion.explosion_reason = ExplosionReason::None;
+        explosion.total_sol_for_payout = 0;
+        explosion.bump = ctx.bumps.presale_explosion;
+
+        emit!(ExplosionInitialized {
+            round_id,
+            deadline: explosion_deadline,
+        });
+
+        Ok(())
+    }
+
+    /// Trigger explosion by revealing the secret cap
+    /// Oracle/authority calls this when market cap threshold is reached
+    pub fn trigger_presale_explosion_cap(
+        ctx: Context<TriggerPresaleExplosion>,
+        revealed_cap: u64,
+    ) -> Result<()> {
+        let explosion = &mut ctx.accounts.presale_explosion;
+        
+        require!(!explosion.is_exploded, BoomError::AlreadyExploded);
+
+        // Verify the revealed cap matches the committed hash
+        let computed_hash = hash(&revealed_cap.to_le_bytes());
+        require!(computed_hash.to_bytes() == explosion.cap_hash, BoomError::InvalidCapReveal);
+
+        explosion.is_exploded = true;
+        explosion.revealed_cap = revealed_cap;
+        explosion.explosion_time = Clock::get()?.unix_timestamp;
+        explosion.explosion_reason = ExplosionReason::CapHit;
+
+        emit!(PresaleExplosionTriggered {
+            round_id: explosion.round_id,
+            reason: ExplosionReason::CapHit,
+            revealed_cap: Some(revealed_cap),
+        });
+
+        Ok(())
+    }
+
+    /// Trigger explosion due to time limit
+    /// Anyone can call this once the deadline passes
+    pub fn trigger_presale_explosion_time(
+        ctx: Context<TriggerPresaleExplosionTime>,
+    ) -> Result<()> {
+        let explosion = &mut ctx.accounts.presale_explosion;
+        let clock = Clock::get()?;
+
+        require!(!explosion.is_exploded, BoomError::AlreadyExploded);
+        require!(explosion.explosion_deadline > 0, BoomError::NoDeadlineSet);
+        require!(clock.unix_timestamp >= explosion.explosion_deadline, BoomError::DeadlineNotReached);
+
+        explosion.is_exploded = true;
+        explosion.explosion_time = clock.unix_timestamp;
+        explosion.explosion_reason = ExplosionReason::TimeLimit;
+
+        emit!(PresaleExplosionTriggered {
+            round_id: explosion.round_id,
+            reason: ExplosionReason::TimeLimit,
+            revealed_cap: None,
+        });
+
+        Ok(())
+    }
+
+    /// Claim payout after explosion
+    /// Token holders can claim their proportional share of SOL
+    pub fn claim_explosion_payout(
+        ctx: Context<ClaimExplosionPayout>,
+    ) -> Result<()> {
+        let explosion = &ctx.accounts.presale_explosion;
+        require!(explosion.is_exploded, BoomError::NotExploded);
+
+        // TODO: Implement proportional payout based on token holdings
+        // This requires:
+        // 1. Reading user's token balance
+        // 2. Calculating their share of total supply
+        // 3. Transferring proportional SOL from LP/treasury
+
+        emit!(PayoutClaimed {
+            round_id: explosion.round_id,
+            user: ctx.accounts.user.key(),
+            amount: 0, // Placeholder
+        });
+
+        Ok(())
+    }
 }
 
 // ==================== EXISTING ACCOUNT CONTEXTS ====================
@@ -755,6 +863,73 @@ pub struct RegisterLp<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// ==================== PRESALE EXPLOSION CONTEXTS ====================
+
+#[derive(Accounts)]
+#[instruction(round_id: u64)]
+pub struct InitPresaleExplosion<'info> {
+    #[account(
+        seeds = [b"presale", round_id.to_le_bytes().as_ref()],
+        bump = presale_round.bump,
+        has_one = authority
+    )]
+    pub presale_round: Account<'info, PresaleRound>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + PresaleExplosion::INIT_SPACE,
+        seeds = [b"presale_explosion", round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub presale_explosion: Account<'info, PresaleExplosion>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct TriggerPresaleExplosion<'info> {
+    #[account(
+        mut,
+        seeds = [b"presale_explosion", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump = presale_explosion.bump
+    )]
+    pub presale_explosion: Account<'info, PresaleExplosion>,
+
+    /// Authority or oracle that can trigger explosion
+    pub trigger_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct TriggerPresaleExplosionTime<'info> {
+    #[account(
+        mut,
+        seeds = [b"presale_explosion", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump = presale_explosion.bump
+    )]
+    pub presale_explosion: Account<'info, PresaleExplosion>,
+
+    /// Anyone can trigger time-based explosion
+    pub caller: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimExplosionPayout<'info> {
+    #[account(
+        seeds = [b"presale_explosion", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump = presale_explosion.bump
+    )]
+    pub presale_explosion: Account<'info, PresaleExplosion>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 // ==================== EXISTING ACCOUNTS ====================
 
 #[account]
@@ -786,7 +961,7 @@ pub struct BoomToken {
     pub bump: u8,
 }
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Default, InitSpace)]
 pub enum ExplosionReason {
     #[default]
     None,
@@ -831,6 +1006,20 @@ pub struct PresaleToken {
     pub mint: Pubkey,               // 32
     pub total_supply: u64,          // 8
     pub tokens_per_winner: u64,     // 8
+    pub bump: u8,                   // 1
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct PresaleExplosion {
+    pub round_id: u64,              // 8
+    pub cap_hash: [u8; 32],         // 32 - SHA256 of secret cap
+    pub revealed_cap: u64,          // 8 - revealed after explosion
+    pub explosion_deadline: i64,    // 8 - time limit
+    pub is_exploded: bool,          // 1
+    pub explosion_time: i64,        // 8
+    pub explosion_reason: ExplosionReason, // 1
+    pub total_sol_for_payout: u64,  // 8 - SOL collected for distribution
     pub bump: u8,                   // 1
 }
 
@@ -941,6 +1130,26 @@ pub struct LpRegistered {
     pub lp_mint: Pubkey,
 }
 
+#[event]
+pub struct ExplosionInitialized {
+    pub round_id: u64,
+    pub deadline: i64,
+}
+
+#[event]
+pub struct PresaleExplosionTriggered {
+    pub round_id: u64,
+    pub reason: ExplosionReason,
+    pub revealed_cap: Option<u64>,
+}
+
+#[event]
+pub struct PayoutClaimed {
+    pub round_id: u64,
+    pub user: Pubkey,
+    pub amount: u64,
+}
+
 // ==================== ERRORS ====================
 
 #[error_code]
@@ -991,4 +1200,6 @@ pub enum BoomError {
     DeadlineNotReached,
     #[msg("Presale token has not been created yet")]
     TokenNotCreated,
+    #[msg("Token has not exploded yet")]
+    NotExploded,
 }
