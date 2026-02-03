@@ -2,6 +2,8 @@
 
 **Crash gambling meets memecoins.**
 
+> 🚀 **Devnet Program ID:** `GC56De2SrwjGsCCFimwqxzxwjpHBEsubP3AV1yXwVtrn`
+
 One token at a time. Hidden explosion threshold. When it blows, everyone gets paid.
 
 ## How It Works
