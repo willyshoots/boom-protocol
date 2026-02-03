@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { useProgram } from './useProgram';
-import { PresaleRound, UserDeposit } from '../lib/idl';
+import { PresaleRound, UserDeposit, PresaleToken } from '../lib/idl';
 
 // Default round ID - can be configured via env or props
 const DEFAULT_ROUND_ID = 1;
@@ -12,6 +12,7 @@ const DEFAULT_ROUND_ID = 1;
 export interface PresaleState {
   round: PresaleRound | null;
   userDeposit: UserDeposit | null;
+  presaleToken: PresaleToken | null;
   loading: boolean;
   error: string | null;
   roundId: number;
@@ -22,6 +23,7 @@ export function usePresale(roundId: number = DEFAULT_ROUND_ID) {
   const { 
     fetchPresaleRound, 
     fetchUserDeposit, 
+    fetchPresaleToken,
     depositPresale,
     claimRefund,
     claimWinnerTokens,
@@ -31,6 +33,7 @@ export function usePresale(roundId: number = DEFAULT_ROUND_ID) {
   const [state, setState] = useState<PresaleState>({
     round: null,
     userDeposit: null,
+    presaleToken: null,
     loading: true,
     error: null,
     roundId,
@@ -43,7 +46,10 @@ export function usePresale(roundId: number = DEFAULT_ROUND_ID) {
     setState(prev => ({ ...prev, loading: true, error: null }));
     
     try {
-      const round = await fetchPresaleRound(roundId);
+      const [round, presaleToken] = await Promise.all([
+        fetchPresaleRound(roundId),
+        fetchPresaleToken(roundId),
+      ]);
       
       let userDeposit: UserDeposit | null = null;
       if (publicKey && round) {
@@ -53,6 +59,7 @@ export function usePresale(roundId: number = DEFAULT_ROUND_ID) {
       setState({
         round,
         userDeposit,
+        presaleToken,
         loading: false,
         error: null,
         roundId,
@@ -112,16 +119,19 @@ export function usePresale(roundId: number = DEFAULT_ROUND_ID) {
     if (!connected) {
       throw new Error('Wallet not connected');
     }
+    if (!state.presaleToken?.mint) {
+      throw new Error('Token not yet created for this round');
+    }
 
     setTxLoading(true);
     try {
-      const signature = await claimWinnerTokens(roundId);
+      const signature = await claimWinnerTokens(roundId, state.presaleToken.mint);
       await refresh();
       return signature;
     } finally {
       setTxLoading(false);
     }
-  }, [connected, roundId, claimWinnerTokens, refresh]);
+  }, [connected, roundId, state.presaleToken, claimWinnerTokens, refresh]);
 
   // Computed values
   const isActive = state.round && !state.round.isFinalized && 
@@ -157,11 +167,14 @@ export function usePresale(roundId: number = DEFAULT_ROUND_ID) {
 
   const isWinner = state.userDeposit?.isWinner ?? false;
   const hasClaimed = state.userDeposit?.claimed ?? false;
+  const tokenMint = state.presaleToken?.mint ?? null;
+  const hasToken = state.presaleToken !== null;
 
   return {
     // Raw state
     round: state.round,
     userDeposit: state.userDeposit,
+    presaleToken: state.presaleToken,
     loading: state.loading,
     txLoading,
     error: state.error,
@@ -180,6 +193,8 @@ export function usePresale(roundId: number = DEFAULT_ROUND_ID) {
     totalDepositors,
     isWinner,
     hasClaimed,
+    tokenMint,
+    hasToken,
     roundExists: state.round !== null,
 
     // Actions

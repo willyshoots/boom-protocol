@@ -410,3 +410,89 @@ export function getBoomTokenPDA(mint: PublicKey): [PublicKey, number] {
     PROGRAM_ID
   );
 }
+
+export function getPresaleExplosionPDA(roundId: BN): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('presale_explosion'), roundId.toArrayLike(Buffer, 'le', 8)],
+    PROGRAM_ID
+  );
+}
+
+export function getPayoutPoolPDA(roundId: BN): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('payout_pool'), roundId.toArrayLike(Buffer, 'le', 8)],
+    PROGRAM_ID
+  );
+}
+
+export function getPayoutVaultPDA(roundId: BN): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('payout_vault'), roundId.toArrayLike(Buffer, 'le', 8)],
+    PROGRAM_ID
+  );
+}
+
+export function getLpInfoPDA(roundId: BN): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('lp_info'), roundId.toArrayLike(Buffer, 'le', 8)],
+    PROGRAM_ID
+  );
+}
+
+export function getRoundSequencerPDA(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('round_sequencer')],
+    PROGRAM_ID
+  );
+}
+
+// Explosion-related interfaces
+export interface PresaleExplosion {
+  roundId: BN;
+  capHash: number[];
+  revealedCap: BN;
+  explosionDeadline: BN;
+  isExploded: boolean;
+  explosionTime: BN;
+  explosionReason: ExplosionReason;
+  totalSolForPayout: BN;
+  bump: number;
+}
+
+export interface PayoutPool {
+  roundId: BN;
+  totalSol: BN;
+  remainingSupply: BN;
+  claimedCount: number;
+  bump: number;
+}
+
+export interface LpInfo {
+  roundId: BN;
+  poolId: PublicKey;
+  lpMint: PublicKey;
+  vaultA: PublicKey;
+  vaultB: PublicKey;
+  registeredAt: BN;
+  bump: number;
+}
+
+export interface RoundSequencer {
+  authority: PublicKey;
+  currentRound: BN;
+  lastExplosionRound: BN;
+  autoAdvanceEnabled: boolean;
+  defaultCooldown: BN;
+  defaultLotterySpots: number;
+  defaultMinDeposit: BN;
+  defaultMaxDeposit: BN;
+  bump: number;
+}
+
+export interface PresaleToken {
+  roundId: BN;
+  mint: PublicKey;
+  totalSupply: BN;
+  tokensPerWinner: BN;
+  bump: number;
+}

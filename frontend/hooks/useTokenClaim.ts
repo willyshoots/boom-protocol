@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
+import { PublicKey } from '@solana/web3.js';
 import { useProgram } from './useProgram';
 
 export type ClaimStatus = 'idle' | 'loading' | 'success' | 'error';
@@ -29,6 +30,7 @@ export interface UseTokenClaimResult {
  * Hook for claiming winner tokens from a presale round.
  * 
  * @param roundId - The presale round ID
+ * @param tokenMint - The token mint address
  * @param isWinner - Whether the user is a lottery winner
  * @param hasClaimed - Whether the user has already claimed
  * @param onSuccess - Optional callback on successful claim
@@ -36,6 +38,7 @@ export interface UseTokenClaimResult {
  */
 export function useTokenClaim(
   roundId: number,
+  tokenMint: PublicKey | null,
   isWinner: boolean,
   hasClaimed: boolean,
   onSuccess?: (signature: string) => void,
@@ -74,13 +77,21 @@ export function useTokenClaim(
       throw error;
     }
 
+    if (!tokenMint) {
+      const error = new Error('Token not yet created for this round');
+      setStatus('error');
+      setErrorMessage(error.message);
+      onError?.(error);
+      throw error;
+    }
+
     // Execute claim
     setStatus('loading');
     setErrorMessage(null);
     setTxSignature(null);
 
     try {
-      const signature = await claimWinnerTokens(roundId);
+      const signature = await claimWinnerTokens(roundId, tokenMint);
       setStatus('success');
       setTxSignature(signature);
       onSuccess?.(signature);
@@ -105,7 +116,7 @@ export function useTokenClaim(
       onError?.(new Error(friendlyMessage));
       throw new Error(friendlyMessage);
     }
-  }, [connected, isWinner, hasClaimed, roundId, claimWinnerTokens, onSuccess, onError]);
+  }, [connected, isWinner, hasClaimed, tokenMint, roundId, claimWinnerTokens, onSuccess, onError]);
 
   const reset = useCallback(() => {
     setStatus('idle');

@@ -31,6 +31,7 @@ export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1 }) => {
     maxDepositSol,
     isWinner,
     hasClaimed,
+    tokenMint,
     deposit,
     refresh,
   } = usePresale(roundId);
@@ -45,6 +46,7 @@ export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1 }) => {
     reset: resetClaim,
   } = useTokenClaim(
     roundId,
+    tokenMint,
     isWinner,
     hasClaimed,
     (sig) => {
