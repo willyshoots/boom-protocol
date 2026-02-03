@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::hash::hash;
+use anchor_lang::solana_program::instruction::AccountMeta;
 use anchor_spl::token::{Mint, Token};
 use anchor_spl::token_2022::{self, Token2022};
 use anchor_spl::token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface};
@@ -14,6 +15,14 @@ pub const TRANSFER_HOOK_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0xb9, 0xc3, 0xf3, 0x40, 0x9a, 0xed, 0x1f, 0xff,
     0xa9, 0xf3, 0x13, 0x20, 0xc6, 0xcf, 0xd1, 0xe8,
 ]); // CzgS4YQmsGxatMVJiKehgGgf12tbtQEM7s4AAyNzWWK9
+
+// Raydium CPMM Program ID (devnet)
+pub const RAYDIUM_CPMM_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
+    0xb9, 0x05, 0x4c, 0x26, 0x39, 0xa8, 0x39, 0x12,
+    0xda, 0x5f, 0x51, 0x0f, 0x4c, 0xc3, 0x26, 0x1a,
+    0x99, 0xf4, 0x21, 0x9e, 0x88, 0xd3, 0x20, 0x8e,
+    0x0d, 0xea, 0x09, 0x5c, 0xfc, 0x73, 0x2d, 0x83,
+]); // DRaycpLY18LhpbydsBWbVJtxpNv9oXPgjRSfpF2bWpYb
 
 #[program]
 pub mod boom {
@@ -388,6 +397,40 @@ pub mod boom {
 
         Ok(())
     }
+
+    // NOTE: On-chain Raydium CPI removed to reduce program size
+    // LP creation is done via Raydium SDK script, then registered here
+
+    /// Register LP pool created via Raydium SDK (hybrid approach)
+    /// This stores the LP info for transfer hook whitelist
+    pub fn register_lp(
+        ctx: Context<RegisterLp>,
+        round_id: u64,
+        pool_id: Pubkey,
+        lp_mint: Pubkey,
+        vault_a: Pubkey,
+        vault_b: Pubkey,
+    ) -> Result<()> {
+        let presale = &ctx.accounts.presale_round;
+        require!(presale.is_finalized, BoomError::PresaleNotFinalized);
+
+        let lp_info = &mut ctx.accounts.lp_info;
+        lp_info.round_id = round_id;
+        lp_info.pool_id = pool_id;
+        lp_info.lp_mint = lp_mint;
+        lp_info.vault_a = vault_a;
+        lp_info.vault_b = vault_b;
+        lp_info.registered_at = Clock::get()?.unix_timestamp;
+        lp_info.bump = ctx.bumps.lp_info;
+
+        emit!(LpRegistered {
+            round_id,
+            pool_id,
+            lp_mint,
+        });
+
+        Ok(())
+    }
 }
 
 // ==================== EXISTING ACCOUNT CONTEXTS ====================
@@ -626,6 +669,33 @@ pub struct CreatePresaleToken<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// NOTE: CreateLiquidityPool context removed - using hybrid approach with Raydium SDK
+
+#[derive(Accounts)]
+#[instruction(round_id: u64)]
+pub struct RegisterLp<'info> {
+    #[account(
+        seeds = [b"presale", round_id.to_le_bytes().as_ref()],
+        bump = presale_round.bump,
+        has_one = authority
+    )]
+    pub presale_round: Account<'info, PresaleRound>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + LpInfo::INIT_SPACE,
+        seeds = [b"lp_info", round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub lp_info: Account<'info, LpInfo>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
 // ==================== EXISTING ACCOUNTS ====================
 
 #[account]
@@ -702,6 +772,18 @@ pub struct PresaleToken {
     pub mint: Pubkey,               // 32
     pub total_supply: u64,          // 8
     pub tokens_per_winner: u64,     // 8
+    pub bump: u8,                   // 1
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct LpInfo {
+    pub round_id: u64,              // 8
+    pub pool_id: Pubkey,            // 32
+    pub lp_mint: Pubkey,            // 32
+    pub vault_a: Pubkey,            // 32 (SOL vault)
+    pub vault_b: Pubkey,            // 32 (Token vault)
+    pub registered_at: i64,         // 8
     pub bump: u8,                   // 1
 }
 
@@ -785,6 +867,21 @@ pub struct TimeLimitSet {
     pub deadline: i64,
 }
 
+#[event]
+pub struct LiquidityPoolCreated {
+    pub round_id: u64,
+    pub pool: Pubkey,
+    pub sol_amount: u64,
+    pub token_amount: u64,
+}
+
+#[event]
+pub struct LpRegistered {
+    pub round_id: u64,
+    pub pool_id: Pubkey,
+    pub lp_mint: Pubkey,
+}
+
 // ==================== ERRORS ====================
 
 #[error_code]
@@ -833,4 +930,6 @@ pub enum BoomError {
     NoDeadlineSet,
     #[msg("Deadline has not been reached yet")]
     DeadlineNotReached,
+    #[msg("Presale token has not been created yet")]
+    TokenNotCreated,
 }
