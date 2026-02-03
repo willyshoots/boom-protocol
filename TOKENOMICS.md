@@ -47,11 +47,30 @@
 - Burn 10-20%, remaining 80-90% splits SOL
 - More holders, smaller individual payouts (but they rode the pump)
 
+## Fees
+
+| Fee | Amount | Destination |
+|-----|--------|-------------|
+| Trading fee | 0.5% | Protocol treasury |
+
+No fee on explosion payouts - keeps the BOOM moment pure.
+
+## Transfer Hook (Anti-External LP)
+
+Single transfer hook program handles all BOOM tokens:
+- Tokens can only transfer to whitelisted destinations
+- Whitelist: user wallets + official BOOM LP
+- Blocks tokens from entering external Raydium/Orca pools
+- One program deployed once, reused for all token launches
+- Per-token whitelist stored in PDAs
+
+This ensures all trading happens through our LP, making explosion mechanics clean.
+
 ## Flow Summary
 
 1. **Presale** → Users deposit SOL, winners selected, losers refunded
 2. **Launch** → LP created at $20k mcap, trading begins
-3. **Trading** → Normal AMM, price discovery
+3. **Trading** → 0.5% fee, only through official LP (transfer hook enforced)
 4. **BOOM** → Threshold hit, LP tokens burned, SOL distributed to holders
 
 ---
