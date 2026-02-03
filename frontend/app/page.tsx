@@ -11,7 +11,9 @@ import {
   PresalePanel,
   AdminPanel,
   ExplosionOverlay,
-  WalletNotInstalled
+  WalletNotInstalled,
+  ExplosionStatus,
+  ClaimPayout
 } from '@/components';
 import { RoundSelector } from '@/components/RoundSelector';
 
@@ -170,6 +172,10 @@ export default function Home() {
                 currentRound={currentRound} 
                 onRoundChange={setCurrentRound} 
               />
+              {/* Explosion Status - shows timer or exploded state */}
+              <ExplosionStatus roundId={currentRound} />
+              {/* Claim Payout - shows after explosion + LP unwind */}
+              <ClaimPayout roundId={currentRound} />
               <RecentExplosions explosions={MOCK_EXPLOSIONS} />
             </div>
           </div>

@@ -34,6 +34,7 @@ export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1 }) => {
     hasClaimed,
     tokenMint,
     deposit,
+    refund,
     refresh,
   } = usePresale(roundId);
 
@@ -200,6 +201,56 @@ export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1 }) => {
           <div>
             <h3 className="text-lg font-bold text-green-400">Tokens Claimed</h3>
             <p className="text-sm text-gray-400">Your presale tokens have been claimed</p>
+          </div>
+        </div>
+      )}
+
+      {/* Refund Section for Non-Winners */}
+      {connected && isFinalized && !isWinner && userDepositSol > 0 && !hasClaimed && (
+        <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/30 rounded-xl">
+          <div className="flex items-center gap-3 mb-3">
+            <span className="text-3xl">💸</span>
+            <div>
+              <h3 className="text-lg font-bold text-blue-400">Claim Your Refund</h3>
+              <p className="text-sm text-gray-300">You didn&apos;t win, but your {userDepositSol.toFixed(4)} SOL is safe</p>
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              setError(null);
+              try {
+                const sig = await refund();
+                setSuccessMessage('Refund claimed successfully!');
+                console.log('Refund tx:', sig);
+              } catch (err) {
+                setError(err instanceof Error ? err.message : 'Refund failed');
+              }
+            }}
+            disabled={txLoading}
+            className="w-full py-3 rounded-xl font-bold text-lg bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {txLoading ? (
+              <>
+                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Processing...
+              </>
+            ) : (
+              '💰 CLAIM REFUND'
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Refund Claimed Badge */}
+      {connected && isFinalized && !isWinner && hasClaimed && (
+        <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-xl flex items-center gap-3">
+          <span className="text-3xl">✅</span>
+          <div>
+            <h3 className="text-lg font-bold text-green-400">Refund Claimed</h3>
+            <p className="text-sm text-gray-400">Your SOL has been returned to your wallet</p>
           </div>
         </div>
       )}
