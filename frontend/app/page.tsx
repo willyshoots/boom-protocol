@@ -174,7 +174,8 @@ export default function Home() {
             <div className="lg:col-span-2 space-y-6">
               <TradingChart 
                 tokenSymbol={MOCK_TOKEN.symbol} 
-                marketCap={marketCap} 
+                marketCap={marketCap}
+                roundId={1}
               />
               
               {/* Mobile buy/sell - shown below chart on mobile */}
