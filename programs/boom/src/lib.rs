@@ -424,4 +424,29 @@ pub enum BoomError {
     
     #[msg("Unauthorized")]
     Unauthorized,
+    
+    // Presale errors
+    #[msg("Presale is not open")]
+    PresaleNotOpen,
+    
+    #[msg("Presale is not closed")]
+    PresaleNotClosed,
+    
+    #[msg("Presale has not ended yet")]
+    PresaleNotEnded,
+    
+    #[msg("Presale is closed")]
+    PresaleClosed,
+    
+    #[msg("Presale is not finalized")]
+    PresaleNotFinalized,
+    
+    #[msg("Lottery is not complete")]
+    LotteryNotComplete,
+    
+    #[msg("Not a lottery winner")]
+    NotWinner,
+    
+    #[msg("Winners cannot claim refund")]
+    WinnerCannotRefund,
 }
