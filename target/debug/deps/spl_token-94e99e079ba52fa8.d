@@ -1,0 +1,10 @@
+/Users/clawdtroy/.openclaw/workspace/boom-protocol/target/debug/deps/spl_token-94e99e079ba52fa8.d: /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/lib.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/error.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/instruction.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/native_mint.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/processor.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/state.rs
+
+/Users/clawdtroy/.openclaw/workspace/boom-protocol/target/debug/deps/libspl_token-94e99e079ba52fa8.rmeta: /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/lib.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/error.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/instruction.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/native_mint.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/processor.rs /Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/state.rs
+
+/Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/lib.rs:
+/Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/error.rs:
+/Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/instruction.rs:
+/Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/native_mint.rs:
+/Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/processor.rs:
+/Users/clawdtroy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spl-token-3.5.0/src/state.rs:
