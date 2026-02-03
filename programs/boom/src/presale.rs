@@ -163,19 +163,7 @@ pub struct ClosePresale<'info> {
     pub authority: Signer<'info>,
 }
 
-#[derive(Accounts)]
-pub struct RunLottery<'info> {
-    #[account(
-        mut,
-        seeds = [b"presale", presale.protocol.as_ref(), &presale.round.to_le_bytes()],
-        bump = presale.bump,
-        constraint = presale.status == PresaleStatus::Closed @ BoomError::PresaleNotClosed
-    )]
-    pub presale: Account<'info, Presale>,
-    
-    /// CHECK: Switchboard VRF account
-    pub vrf: AccountInfo<'info>,
-}
+// Note: RunLottery is now handled by the VRF module (RequestLotteryVrf + ConsumeLotteryVrf)
 
 #[derive(Accounts)]
 pub struct ClaimAllocation<'info> {
@@ -330,24 +318,8 @@ pub fn close_presale(ctx: Context<ClosePresale>) -> Result<()> {
     Ok(())
 }
 
-pub fn run_lottery(ctx: Context<RunLottery>, vrf_result: [u8; 32]) -> Result<()> {
-    let presale = &mut ctx.accounts.presale;
-    
-    // TODO: Verify VRF result from Switchboard
-    presale.lottery_seed = vrf_result;
-    presale.status = PresaleStatus::LotteryComplete;
-    
-    // Winners are determined off-chain using the seed
-    // Each deposit checks if they won based on: hash(seed + position) < threshold
-    
-    emit!(LotteryComplete {
-        round: presale.round,
-        lottery_seed: vrf_result,
-        winner_count: presale.winner_count,
-    });
-    
-    Ok(())
-}
+// Note: run_lottery is now handled by the VRF module (request_lottery_vrf + consume_lottery_vrf)
+// The VRF module sets presale.lottery_seed and presale.status = LotteryComplete
 
 pub fn claim_allocation(ctx: Context<ClaimAllocation>) -> Result<()> {
     let deposit = &mut ctx.accounts.deposit;
@@ -430,12 +402,7 @@ pub struct PresaleClosed {
     pub depositor_count: u32,
 }
 
-#[event]
-pub struct LotteryComplete {
-    pub round: u64,
-    pub lottery_seed: [u8; 32],
-    pub winner_count: u32,
-}
+// Note: LotteryComplete event is now in vrf.rs as LotteryVrfConsumed
 
 #[event]
 pub struct AllocationClaimed {

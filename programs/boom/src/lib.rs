@@ -2,6 +2,12 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 use switchboard_solana::prelude::*;
 
+pub mod presale;
+pub mod vrf;
+
+pub use presale::*;
+pub use vrf::*;
+
 declare_id!("BOOM111111111111111111111111111111111111111");
 
 /// BOOM Protocol - AI-launched tokens with hidden explosion market caps
@@ -194,6 +200,74 @@ pub mod boom {
         });
         
         Ok(())
+    }
+
+    // ========================================================================
+    // VRF Instructions
+    // ========================================================================
+
+    /// Initialize the VRF client for the protocol
+    /// Must be called after protocol initialization
+    pub fn initialize_vrf(ctx: Context<vrf::InitializeVrf>) -> Result<()> {
+        vrf::initialize_vrf(ctx)
+    }
+
+    /// Request VRF randomness for a BOOM token's secret market cap
+    /// Called after create_boom_token to generate the hidden threshold
+    pub fn request_cap_vrf(ctx: Context<vrf::RequestCapVrf>) -> Result<()> {
+        vrf::request_cap_vrf(ctx)
+    }
+
+    /// Callback to consume VRF result and set the secret cap
+    /// Called by anyone after VRF oracle fulfills the request
+    pub fn consume_cap_vrf(ctx: Context<vrf::ConsumeCapVrf>) -> Result<()> {
+        vrf::consume_cap_vrf(ctx)
+    }
+
+    /// Request VRF randomness for presale lottery winner selection
+    /// Called after presale closes to determine winners
+    pub fn request_lottery_vrf(ctx: Context<vrf::RequestLotteryVrf>) -> Result<()> {
+        vrf::request_lottery_vrf(ctx)
+    }
+
+    /// Callback to consume VRF result and complete the lottery
+    /// Called by anyone after VRF oracle fulfills the request
+    pub fn consume_lottery_vrf(ctx: Context<vrf::ConsumeLotteryVrf>) -> Result<()> {
+        vrf::consume_lottery_vrf(ctx)
+    }
+
+    // ========================================================================
+    // Presale Instructions  
+    // ========================================================================
+
+    /// Open a new presale round for the next token launch
+    pub fn open_presale(
+        ctx: Context<presale::OpenPresale>,
+        cooldown_seconds: i64,
+        winner_count: u32,
+        winner_allocation: u64,
+    ) -> Result<()> {
+        presale::open_presale(ctx, cooldown_seconds, winner_count, winner_allocation)
+    }
+
+    /// Deposit into the presale pool
+    pub fn deposit_presale(ctx: Context<presale::DepositPresale>, amount: u64) -> Result<()> {
+        presale::deposit_presale(ctx, amount)
+    }
+
+    /// Close the presale (after cooldown ends)
+    pub fn close_presale(ctx: Context<presale::ClosePresale>) -> Result<()> {
+        presale::close_presale(ctx)
+    }
+
+    /// Claim allocation as a lottery winner
+    pub fn claim_allocation(ctx: Context<presale::ClaimAllocation>) -> Result<()> {
+        presale::claim_allocation(ctx)
+    }
+
+    /// Claim refund as a non-winner
+    pub fn claim_refund(ctx: Context<presale::ClaimRefund>) -> Result<()> {
+        presale::claim_refund(ctx)
     }
 }
 
