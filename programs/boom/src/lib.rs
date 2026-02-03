@@ -270,9 +270,9 @@ pub struct Initialize<'info> {
 #[derive(Accounts)]
 pub struct CreateBoomToken<'info> {
     #[account(init, payer = creator, space = 8 + 170, seeds = [b"boom_token", mint.key().as_ref()], bump)]
-    pub boom_token: Account<'info, BoomToken>,
+    pub boom_token: Box<Account<'info, BoomToken>>,
     #[account(mut, seeds = [b"protocol"], bump = protocol.bump)]
-    pub protocol: Account<'info, Protocol>,
+    pub protocol: Box<Account<'info, Protocol>>,
     pub mint: Account<'info, Mint>,
     #[account(mut)]
     pub creator: Signer<'info>,
