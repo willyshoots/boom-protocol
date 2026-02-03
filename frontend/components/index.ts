@@ -4,6 +4,7 @@ export { BuySellPanel } from './BuySellPanel';
 export { Holdings } from './Holdings';
 export { RecentExplosions } from './RecentExplosions';
 export { PresalePanel } from './PresalePanel';
+export { AdminPanel } from './AdminPanel';
 export { Header } from './Header';
 export { ExplosionOverlay } from './ExplosionOverlay';
 export { WalletButton } from './WalletButton';

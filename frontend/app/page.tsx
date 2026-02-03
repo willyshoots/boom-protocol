@@ -9,6 +9,7 @@ import {
   Holdings,
   RecentExplosions,
   PresalePanel,
+  AdminPanel,
   ExplosionOverlay,
   WalletNotInstalled
 } from '@/components';
@@ -135,19 +136,8 @@ export default function Home() {
     }));
   };
 
-  const handlePresaleDeposit = (amount: number) => {
-    if (!connected) {
-      if (!isPhantomInstalled()) {
-        setShowWalletNotInstalled(true);
-        return;
-      }
-      return;
-    }
-    console.log('Presale deposit:', amount, 'SOL');
-  };
-
-  // Cooldown ends in 5 minutes for demo
-  const cooldownEndsAt = new Date(Date.now() + 5 * 60 * 1000);
+  // Admin panel toggle
+  const [showAdmin, setShowAdmin] = useState(false);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -160,14 +150,18 @@ export default function Home() {
         {isPresale ? (
           // Presale view
           <div className="grid lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2">
-              <PresalePanel
-                cooldownEndsAt={cooldownEndsAt}
-                totalDeposits={125.5}
-                yourDeposit={connected ? 0.5 : 0}
-                lotterySpots={50}
-                onDeposit={handlePresaleDeposit}
-              />
+            <div className="lg:col-span-2 space-y-6">
+              <PresalePanel roundId={1} />
+              
+              {/* Admin toggle */}
+              <button
+                onClick={() => setShowAdmin(!showAdmin)}
+                className="w-full py-2 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg hover:border-gray-600 transition-colors"
+              >
+                {showAdmin ? '🔼 Hide Admin Panel' : '🔐 Show Admin Panel'}
+              </button>
+              
+              {showAdmin && <AdminPanel />}
             </div>
             <div className="space-y-6">
               <RecentExplosions explosions={MOCK_EXPLOSIONS} />
