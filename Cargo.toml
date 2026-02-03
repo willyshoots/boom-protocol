@@ -1,5 +1,5 @@
 [workspace]
-members = ["programs/boom"]
+members = ["programs/boom", "programs/boom-hook"]
 resolver = "2"
 
 [profile.release]

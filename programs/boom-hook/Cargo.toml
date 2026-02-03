@@ -1,12 +1,12 @@
 [package]
-name = "boom"
+name = "boom-hook"
 version = "0.1.0"
-description = "AI-launched tokens with hidden explosion market caps"
+description = "Transfer hook for BOOM Protocol - restricts transfers to pools"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "boom"
+name = "boom_hook"
 
 [features]
 no-entrypoint = []
@@ -16,5 +16,8 @@ cpi = ["no-entrypoint"]
 default = []
 
 [dependencies]
-anchor-lang = { version = "0.30.1", features = ["init-if-needed"] }
+anchor-lang = "0.30.1"
 anchor-spl = { version = "0.30.1", features = ["token_2022"] }
+spl-transfer-hook-interface = "0.6"
+spl-tlv-account-resolution = "0.6"
+solana-program = "1.18"

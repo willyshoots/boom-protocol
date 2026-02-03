@@ -37,7 +37,7 @@ const isPhantomInstalled = () => {
 
 export default function Home() {
   const { connected, publicKey } = useWallet();
-  const [isPresale, setIsPresale] = useState(false);
+  const [isPresale, setIsPresale] = useState(true); // Start in presale mode for testing
   const [isExploding, setIsExploding] = useState(false);
   const [marketCap, setMarketCap] = useState(MOCK_TOKEN.marketCap);
   const [showWalletNotInstalled, setShowWalletNotInstalled] = useState(false);

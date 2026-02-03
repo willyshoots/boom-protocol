@@ -65,12 +65,14 @@ export function usePresale(roundId: number = DEFAULT_ROUND_ID) {
         error: err instanceof Error ? err.message : 'Failed to fetch presale data',
       }));
     }
-  }, [roundId, publicKey, fetchPresaleRound, fetchUserDeposit]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundId, publicKey?.toBase58()]); // Use string key to prevent object reference changes
 
   // Initial fetch + refresh when wallet changes
   useEffect(() => {
     refresh();
-  }, [refresh]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundId, publicKey?.toBase58()]); // Don't depend on refresh to avoid loop
 
   // Deposit handler
   const deposit = useCallback(async (amountSol: number): Promise<string> => {

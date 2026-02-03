@@ -1,414 +1,163 @@
 'use client';
 
-import { FC, useState, useCallback } from 'react';
+import { FC, useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { PublicKey } from '@solana/web3.js';
-import { useProgram } from '../hooks/useProgram';
-import { usePresale } from '../hooks/usePresale';
+import { useConnection } from '@solana/wallet-adapter-react';
+import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { Program, AnchorProvider, BN } from '@coral-xyz/anchor';
+
+// Program ID from deployment
+const PROGRAM_ID = new PublicKey('GC56De2SrwjGsCCFimwqxzxwjpHBEsubP3AV1yXwVtrn');
 
 export const AdminPanel: FC = () => {
-  const { connected, publicKey } = useWallet();
-  const { 
-    initializeProtocol, 
-    startPresale, 
-    endPresaleAndLottery, 
-    markWinner,
-    checkProtocolInitialized,
-  } = useProgram();
+  const { connected, publicKey, signTransaction, signAllTransactions } = useWallet();
+  const { connection } = useConnection();
 
-  const [activeTab, setActiveTab] = useState<'init' | 'start' | 'end' | 'winner'>('start');
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [protocolInitialized, setProtocolInitialized] = useState<boolean | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
 
   // Form states
-  const [initForm, setInitForm] = useState({
-    treasury: '',
-    minCap: '1',
-    maxCap: '100',
-    feeBps: '250',
-  });
+  const [roundId, setRoundId] = useState('1');
+  const [cooldownMinutes, setCooldownMinutes] = useState('30');
+  const [lotterySpots, setLotterySpots] = useState('10');
+  const [minDeposit, setMinDeposit] = useState('0.1');
+  const [maxDeposit, setMaxDeposit] = useState('10');
 
-  const [startForm, setStartForm] = useState({
-    roundId: '1',
-    cooldownMinutes: '30',
-    lotterySpots: '10',
-    minDeposit: '0.1',
-    maxDeposit: '10',
-  });
+  const showStatus = (msg: string, isError = false) => {
+    setStatus(msg);
+    console.log(isError ? 'Error:' : 'Success:', msg);
+    setTimeout(() => setStatus(null), 5000);
+  };
 
-  const [endForm, setEndForm] = useState({
-    roundId: '1',
-    winnerIndexes: '',
-  });
-
-  const [winnerForm, setWinnerForm] = useState({
-    roundId: '1',
-    winnerPubkey: '',
-  });
-
-  // Check protocol status
-  const checkProtocol = useCallback(async () => {
-    const initialized = await checkProtocolInitialized();
-    setProtocolInitialized(initialized);
-  }, [checkProtocolInitialized]);
-
-  // Initialize protocol
-  const handleInitialize = useCallback(async () => {
-    if (!connected) return;
-    
-    setLoading(true);
-    setStatus(null);
-    
+  // Check if protocol PDA exists
+  const checkProtocol = async () => {
     try {
-      const treasuryPubkey = initForm.treasury 
-        ? new PublicKey(initForm.treasury) 
-        : publicKey!;
-      
-      const tx = await initializeProtocol(
-        treasuryPubkey,
-        parseFloat(initForm.minCap),
-        parseFloat(initForm.maxCap),
-        parseInt(initForm.feeBps)
+      const [protocolPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from('protocol')],
+        PROGRAM_ID
       );
-      
-      setStatus({ type: 'success', message: `Protocol initialized! Tx: ${tx.slice(0, 16)}...` });
-      setProtocolInitialized(true);
-    } catch (err) {
-      console.error('Initialize failed:', err);
-      setStatus({ type: 'error', message: err instanceof Error ? err.message : 'Failed to initialize' });
-    } finally {
-      setLoading(false);
+      const info = await connection.getAccountInfo(protocolPDA);
+      showStatus(info ? '✅ Protocol is initialized' : '❌ Protocol not initialized');
+    } catch (e: any) {
+      showStatus(`Error: ${e.message}`, true);
     }
-  }, [connected, publicKey, initForm, initializeProtocol]);
+  };
 
-  // Start presale
-  const handleStartPresale = useCallback(async () => {
-    if (!connected) return;
-    
-    setLoading(true);
-    setStatus(null);
-    
+  // Check if presale round exists
+  const checkPresale = async () => {
     try {
-      const tx = await startPresale(
-        parseInt(startForm.roundId),
-        parseInt(startForm.cooldownMinutes) * 60, // Convert to seconds
-        parseInt(startForm.lotterySpots),
-        parseFloat(startForm.minDeposit),
-        parseFloat(startForm.maxDeposit)
+      const roundIdBN = new BN(parseInt(roundId));
+      const [presalePDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from('presale'), roundIdBN.toArrayLike(Buffer, 'le', 8)],
+        PROGRAM_ID
       );
-      
-      setStatus({ type: 'success', message: `Presale started! Tx: ${tx.slice(0, 16)}...` });
-    } catch (err) {
-      console.error('Start presale failed:', err);
-      setStatus({ type: 'error', message: err instanceof Error ? err.message : 'Failed to start presale' });
-    } finally {
-      setLoading(false);
+      const info = await connection.getAccountInfo(presalePDA);
+      showStatus(info ? `✅ Presale round ${roundId} exists` : `❌ Presale round ${roundId} not found`);
+    } catch (e: any) {
+      showStatus(`Error: ${e.message}`, true);
     }
-  }, [connected, startForm, startPresale]);
-
-  // End presale and lottery
-  const handleEndPresale = useCallback(async () => {
-    if (!connected) return;
-    
-    setLoading(true);
-    setStatus(null);
-    
-    try {
-      const winnerIndexes = endForm.winnerIndexes
-        .split(',')
-        .map(s => s.trim())
-        .filter(s => s !== '')
-        .map(s => parseInt(s));
-      
-      const tx = await endPresaleAndLottery(
-        parseInt(endForm.roundId),
-        winnerIndexes
-      );
-      
-      setStatus({ type: 'success', message: `Presale finalized! Tx: ${tx.slice(0, 16)}...` });
-    } catch (err) {
-      console.error('End presale failed:', err);
-      setStatus({ type: 'error', message: err instanceof Error ? err.message : 'Failed to end presale' });
-    } finally {
-      setLoading(false);
-    }
-  }, [connected, endForm, endPresaleAndLottery]);
-
-  // Mark winner
-  const handleMarkWinner = useCallback(async () => {
-    if (!connected) return;
-    
-    setLoading(true);
-    setStatus(null);
-    
-    try {
-      const winnerPubkey = new PublicKey(winnerForm.winnerPubkey);
-      
-      const tx = await markWinner(
-        parseInt(winnerForm.roundId),
-        winnerPubkey
-      );
-      
-      setStatus({ type: 'success', message: `Winner marked! Tx: ${tx.slice(0, 16)}...` });
-    } catch (err) {
-      console.error('Mark winner failed:', err);
-      setStatus({ type: 'error', message: err instanceof Error ? err.message : 'Failed to mark winner' });
-    } finally {
-      setLoading(false);
-    }
-  }, [connected, winnerForm, markWinner]);
+  };
 
   if (!connected) {
     return (
-      <div className="boom-card border-2 border-purple-500/50">
-        <h2 className="text-xl font-bold text-white mb-4">🔐 Admin Panel</h2>
-        <p className="text-gray-400">Connect your wallet to access admin functions.</p>
+      <div className="boom-card border border-yellow-500/30">
+        <h3 className="text-lg font-bold text-yellow-400 mb-4">🔐 Admin Panel</h3>
+        <p className="text-gray-400">Connect wallet to access admin functions</p>
       </div>
     );
   }
 
   return (
-    <div className="boom-card border-2 border-purple-500/50">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-white">🔐 Admin Panel</h2>
-        <button
-          onClick={checkProtocol}
-          className="px-3 py-1 text-sm bg-gray-800 rounded-lg hover:bg-gray-700"
-        >
-          Check Protocol
-        </button>
-      </div>
-
-      {/* Protocol status */}
-      {protocolInitialized !== null && (
-        <div className={`mb-4 p-3 rounded-lg text-sm ${
-          protocolInitialized 
-            ? 'bg-green-500/20 border border-green-500/30 text-green-400' 
-            : 'bg-yellow-500/20 border border-yellow-500/30 text-yellow-400'
-        }`}>
-          {protocolInitialized ? '✅ Protocol initialized' : '⚠️ Protocol not initialized - initialize first!'}
-        </div>
-      )}
-
-      {/* Status message */}
+    <div className="boom-card border border-yellow-500/30">
+      <h3 className="text-lg font-bold text-yellow-400 mb-4">🔐 Admin Panel</h3>
+      
       {status && (
-        <div className={`mb-4 p-3 rounded-lg text-sm ${
-          status.type === 'success' 
-            ? 'bg-green-500/20 border border-green-500/30 text-green-400' 
-            : 'bg-red-500/20 border border-red-500/30 text-red-400'
-        }`}>
-          {status.type === 'success' ? '✅' : '❌'} {status.message}
+        <div className={`mb-4 p-3 rounded-lg ${status.includes('Error') || status.includes('❌') ? 'bg-red-500/20 text-red-400' : 'bg-green-500/20 text-green-400'}`}>
+          {status}
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex gap-2 mb-6 overflow-x-auto">
-        {[
-          { id: 'init', label: '🏗️ Initialize' },
-          { id: 'start', label: '🚀 Start Presale' },
-          { id: 'end', label: '🏁 End & Lottery' },
-          { id: 'winner', label: '🏆 Mark Winner' },
-        ].map(tab => (
+      {/* Quick Checks */}
+      <div className="mb-6">
+        <h4 className="text-sm font-bold text-gray-400 mb-2">Quick Checks</h4>
+        <div className="flex gap-2">
           <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as typeof activeTab)}
-            className={`px-4 py-2 rounded-lg font-medium whitespace-nowrap transition-colors ${
-              activeTab === tab.id
-                ? 'bg-purple-500 text-white'
-                : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-            }`}
+            onClick={checkProtocol}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
           >
-            {tab.label}
+            Check Protocol
           </button>
-        ))}
+          <button
+            onClick={checkPresale}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm"
+          >
+            Check Presale
+          </button>
+        </div>
       </div>
 
-      {/* Initialize Protocol Form */}
-      {activeTab === 'init' && (
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Treasury Address (optional, defaults to your wallet)</label>
-            <input
-              type="text"
-              value={initForm.treasury}
-              onChange={e => setInitForm(f => ({ ...f, treasury: e.target.value }))}
-              placeholder={publicKey?.toString()}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-            />
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Min Cap (SOL)</label>
-              <input
-                type="number"
-                value={initForm.minCap}
-                onChange={e => setInitForm(f => ({ ...f, minCap: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Max Cap (SOL)</label>
-              <input
-                type="number"
-                value={initForm.maxCap}
-                onChange={e => setInitForm(f => ({ ...f, maxCap: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Fee (bps)</label>
-              <input
-                type="number"
-                value={initForm.feeBps}
-                onChange={e => setInitForm(f => ({ ...f, feeBps: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-              />
-            </div>
-          </div>
-          <button
-            onClick={handleInitialize}
-            disabled={loading}
-            className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 disabled:opacity-50"
-          >
-            {loading ? '⏳ Initializing...' : '🏗️ Initialize Protocol'}
-          </button>
-        </div>
-      )}
+      {/* Round ID input */}
+      <div className="mb-4">
+        <label className="block text-sm text-gray-400 mb-1">Round ID</label>
+        <input
+          type="number"
+          value={roundId}
+          onChange={(e) => setRoundId(e.target.value)}
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+        />
+      </div>
 
-      {/* Start Presale Form */}
-      {activeTab === 'start' && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Round ID</label>
-              <input
-                type="number"
-                value={startForm.roundId}
-                onChange={e => setStartForm(f => ({ ...f, roundId: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Cooldown (minutes)</label>
-              <input
-                type="number"
-                value={startForm.cooldownMinutes}
-                onChange={e => setStartForm(f => ({ ...f, cooldownMinutes: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Lottery Spots</label>
-            <input
-              type="number"
-              value={startForm.lotterySpots}
-              onChange={e => setStartForm(f => ({ ...f, lotterySpots: e.target.value }))}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Min Deposit (SOL)</label>
-              <input
-                type="number"
-                value={startForm.minDeposit}
-                onChange={e => setStartForm(f => ({ ...f, minDeposit: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-gray-400 mb-1">Max Deposit (SOL)</label>
-              <input
-                type="number"
-                value={startForm.maxDeposit}
-                onChange={e => setStartForm(f => ({ ...f, maxDeposit: e.target.value }))}
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-              />
-            </div>
-          </div>
-          <button
-            onClick={handleStartPresale}
-            disabled={loading}
-            className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-orange-500 to-yellow-500 hover:from-orange-600 hover:to-yellow-600 disabled:opacity-50"
-          >
-            {loading ? '⏳ Starting...' : '🚀 Start Presale Round'}
-          </button>
+      {/* Presale Settings */}
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Cooldown (min)</label>
+          <input
+            type="number"
+            value={cooldownMinutes}
+            onChange={(e) => setCooldownMinutes(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+          />
         </div>
-      )}
-
-      {/* End Presale Form */}
-      {activeTab === 'end' && (
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Round ID</label>
-            <input
-              type="number"
-              value={endForm.roundId}
-              onChange={e => setEndForm(f => ({ ...f, roundId: e.target.value }))}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Winner Indexes (comma-separated, e.g. 0,3,7)</label>
-            <input
-              type="text"
-              value={endForm.winnerIndexes}
-              onChange={e => setEndForm(f => ({ ...f, winnerIndexes: e.target.value }))}
-              placeholder="0, 1, 2"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              These indexes are for off-chain reference. Call markWinner for each winner after.
-            </p>
-          </div>
-          <button
-            onClick={handleEndPresale}
-            disabled={loading}
-            className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-red-500 to-orange-500 hover:from-red-600 hover:to-orange-600 disabled:opacity-50"
-          >
-            {loading ? '⏳ Finalizing...' : '🏁 End Presale & Run Lottery'}
-          </button>
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Lottery Spots</label>
+          <input
+            type="number"
+            value={lotterySpots}
+            onChange={(e) => setLotterySpots(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+          />
         </div>
-      )}
-
-      {/* Mark Winner Form */}
-      {activeTab === 'winner' && (
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Round ID</label>
-            <input
-              type="number"
-              value={winnerForm.roundId}
-              onChange={e => setWinnerForm(f => ({ ...f, roundId: e.target.value }))}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm text-gray-400 mb-1">Winner Wallet Address</label>
-            <input
-              type="text"
-              value={winnerForm.winnerPubkey}
-              onChange={e => setWinnerForm(f => ({ ...f, winnerPubkey: e.target.value }))}
-              placeholder="Winner's public key"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm focus:outline-none focus:border-purple-500"
-            />
-          </div>
-          <button
-            onClick={handleMarkWinner}
-            disabled={loading || !winnerForm.winnerPubkey}
-            className="w-full py-3 rounded-xl font-bold bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-600 hover:to-orange-600 disabled:opacity-50"
-          >
-            {loading ? '⏳ Marking...' : '🏆 Mark as Winner'}
-          </button>
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Min Deposit (SOL)</label>
+          <input
+            type="number"
+            value={minDeposit}
+            onChange={(e) => setMinDeposit(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+          />
         </div>
-      )}
+        <div>
+          <label className="block text-sm text-gray-400 mb-1">Max Deposit (SOL)</label>
+          <input
+            type="number"
+            value={maxDeposit}
+            onChange={(e) => setMaxDeposit(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+          />
+        </div>
+      </div>
 
       {/* Info */}
-      <div className="mt-6 pt-4 border-t border-gray-800 text-xs text-gray-500">
-        <p>⚠️ Admin functions require the authority wallet that started the presale.</p>
-        <p className="mt-1">Connected: {publicKey?.toString().slice(0, 8)}...{publicKey?.toString().slice(-8)}</p>
+      <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm text-blue-300">
+        <p><strong>Program ID:</strong></p>
+        <p className="font-mono text-xs break-all">{PROGRAM_ID.toString()}</p>
+        <p className="mt-2"><strong>Your Wallet:</strong></p>
+        <p className="font-mono text-xs break-all">{publicKey?.toString()}</p>
+      </div>
+
+      <div className="mt-4 text-xs text-gray-500">
+        Note: Full admin functions (initialize, start presale) require calling the Anchor program directly. 
+        Use the CLI or a script for now.
       </div>
     </div>
   );

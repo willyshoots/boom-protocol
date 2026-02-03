@@ -38,17 +38,22 @@ export function useProgram() {
     );
   }, [connection, wallet.publicKey, wallet.signTransaction, wallet.signAllTransactions]);
 
-  // Create program instance
+  // Create program instance (lazy - only when needed for writes)
   const program = useMemo(() => {
     if (!provider) return null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return new Program(IDL as any, provider) as BoomProgram;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return new Program(IDL as any, provider) as BoomProgram;
+    } catch (error) {
+      console.error('Error creating Anchor program:', error);
+      return null;
+    }
   }, [provider]);
 
   // ==================== READ FUNCTIONS ====================
 
   /**
-   * Fetch presale round data
+   * Fetch presale round data (raw deserialization - no Anchor coder)
    */
   const fetchPresaleRound = useCallback(async (roundId: number): Promise<PresaleRound | null> => {
     try {
@@ -57,17 +62,56 @@ export function useProgram() {
       
       if (!accountInfo) return null;
 
-      // Use a temporary program for decoding (doesn't need signer)
-      const tempProvider = new AnchorProvider(
-        connection,
-        { publicKey: PublicKey.default, signTransaction: async (tx) => tx, signAllTransactions: async (txs) => txs },
-        { commitment: 'confirmed' }
-      );
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const tempProgram = new Program(IDL as any, tempProvider);
-      
-      const decoded = tempProgram.coder.accounts.decode('PresaleRound', accountInfo.data);
-      return decoded as PresaleRound;
+      // Raw deserialization of PresaleRound account
+      // Skip 8-byte discriminator
+      const data = accountInfo.data.slice(8);
+      let offset = 0;
+
+      const authority = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+
+      const roundIdVal = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const startTime = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const endTime = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const lotterySpots = data.readUInt32LE(offset);
+      offset += 4;
+
+      const minDeposit = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const maxDeposit = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const totalDeposited = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const totalDepositors = data.readUInt32LE(offset);
+      offset += 4;
+
+      const isFinalized = data[offset] === 1;
+      offset += 1;
+
+      const bump = data[offset];
+
+      return {
+        authority,
+        roundId: roundIdVal,
+        startTime,
+        endTime,
+        lotterySpots,
+        minDeposit,
+        maxDeposit,
+        totalDeposited,
+        totalDepositors,
+        isFinalized,
+        bump,
+      };
     } catch (error) {
       console.error('Error fetching presale round:', error);
       return null;
@@ -75,7 +119,7 @@ export function useProgram() {
   }, [connection]);
 
   /**
-   * Fetch user deposit for a specific round
+   * Fetch user deposit for a specific round (raw deserialization)
    */
   const fetchUserDeposit = useCallback(async (roundId: number, userPubkey: PublicKey): Promise<UserDeposit | null> => {
     try {
@@ -84,16 +128,40 @@ export function useProgram() {
       
       if (!accountInfo) return null;
 
-      const tempProvider = new AnchorProvider(
-        connection,
-        { publicKey: PublicKey.default, signTransaction: async (tx) => tx, signAllTransactions: async (txs) => txs },
-        { commitment: 'confirmed' }
-      );
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const tempProgram = new Program(IDL as any, tempProvider);
-      
-      const decoded = tempProgram.coder.accounts.decode('UserDeposit', accountInfo.data);
-      return decoded as UserDeposit;
+      // Raw deserialization of UserDeposit account
+      // Skip 8-byte discriminator
+      const data = accountInfo.data.slice(8);
+      let offset = 0;
+
+      const depositor = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+
+      const roundIdVal = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const amount = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const depositTime = new BN(data.slice(offset, offset + 8), 'le');
+      offset += 8;
+
+      const isWinner = data[offset] === 1;
+      offset += 1;
+
+      const claimed = data[offset] === 1;
+      offset += 1;
+
+      const bump = data[offset];
+
+      return {
+        depositor,
+        roundId: roundIdVal,
+        amount,
+        depositTime,
+        isWinner,
+        claimed,
+        bump,
+      };
     } catch (error) {
       console.error('Error fetching user deposit:', error);
       return null;
