@@ -13,6 +13,7 @@ import {
   ExplosionOverlay,
   WalletNotInstalled
 } from '@/components';
+import { RoundSelector } from '@/components/RoundSelector';
 
 // Mock data for demonstration
 const MOCK_TOKEN = {
@@ -42,6 +43,7 @@ export default function Home() {
   const [marketCap, setMarketCap] = useState(MOCK_TOKEN.marketCap);
   const [showWalletNotInstalled, setShowWalletNotInstalled] = useState(false);
   const [phantomChecked, setPhantomChecked] = useState(false);
+  const [currentRound, setCurrentRound] = useState(1);
   
   // Mock user holdings
   const [userHoldings, setUserHoldings] = useState({
@@ -151,7 +153,7 @@ export default function Home() {
           // Presale view
           <div className="grid lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2 space-y-6">
-              <PresalePanel roundId={1} />
+              <PresalePanel roundId={currentRound} />
               
               {/* Admin toggle */}
               <button
@@ -164,6 +166,10 @@ export default function Home() {
               {showAdmin && <AdminPanel />}
             </div>
             <div className="space-y-6">
+              <RoundSelector 
+                currentRound={currentRound} 
+                onRoundChange={setCurrentRound} 
+              />
               <RecentExplosions explosions={MOCK_EXPLOSIONS} />
             </div>
           </div>
@@ -175,7 +181,7 @@ export default function Home() {
               <TradingChart 
                 tokenSymbol={MOCK_TOKEN.symbol} 
                 marketCap={marketCap}
-                roundId={1}
+                roundId={currentRound}
               />
               
               {/* Mobile buy/sell - shown below chart on mobile */}
@@ -206,6 +212,11 @@ export default function Home() {
                 tokenBalance={userHoldings.tokenBalance}
                 tokenValue={userHoldings.tokenValue}
                 solBalance={userHoldings.solBalance}
+              />
+
+              <RoundSelector 
+                currentRound={currentRound} 
+                onRoundChange={setCurrentRound} 
               />
 
               <RecentExplosions explosions={MOCK_EXPLOSIONS} />
