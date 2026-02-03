@@ -26,7 +26,9 @@ import {
   TYPE_SIZE,
   LENGTH_SIZE,
 } from '@solana/spl-token';
-import { BN } from '@coral-xyz/anchor';
+import pkg from '@coral-xyz/anchor';
+const { BN } = pkg;
+type BNType = InstanceType<typeof BN>;
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -44,21 +46,21 @@ function getDiscriminator(name: string): Buffer {
 }
 
 // PDA helpers
-function getPresaleRoundPDA(roundId: BN): [PublicKey, number] {
+function getPresaleRoundPDA(roundId: any): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from('presale'), roundId.toArrayLike(Buffer, 'le', 8)],
     BOOM_PROGRAM_ID
   );
 }
 
-function getPresaleTokenPDA(roundId: BN): [PublicKey, number] {
+function getPresaleTokenPDA(roundId: any): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from('presale_token'), roundId.toArrayLike(Buffer, 'le', 8)],
     BOOM_PROGRAM_ID
   );
 }
 
-function getMintAuthorityPDA(roundId: BN): [PublicKey, number] {
+function getMintAuthorityPDA(roundId: any): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from('mint_authority'), roundId.toArrayLike(Buffer, 'le', 8)],
     BOOM_PROGRAM_ID
@@ -94,7 +96,7 @@ function parsePresaleRound(data: Buffer) {
 }
 
 // Count winners
-async function countWinners(connection: Connection, roundId: BN): Promise<number> {
+async function countWinners(connection: Connection, roundId: any): Promise<number> {
   const accounts = await connection.getProgramAccounts(BOOM_PROGRAM_ID, {
     filters: [
       { memcmp: { offset: 0, bytes: Buffer.from([69, 238, 23, 217, 255, 137, 185, 35]).toString('base64') } },

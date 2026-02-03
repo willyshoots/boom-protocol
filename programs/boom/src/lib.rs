@@ -467,12 +467,11 @@ pub mod boom {
     // ==================== PRESALE EXPLOSION ====================
 
     /// Initialize explosion tracking for a presale token
-    /// Sets the secret cap hash and optional time limit
+    /// Sets the secret cap hash. Timer is NOT started yet - call start_explosion_timer after LP creation.
     pub fn init_presale_explosion(
         ctx: Context<InitPresaleExplosion>,
         round_id: u64,
         cap_hash: [u8; 32],
-        explosion_deadline: i64,
     ) -> Result<()> {
         let presale = &ctx.accounts.presale_round;
         require!(presale.is_finalized, BoomError::PresaleNotFinalized);
@@ -481,7 +480,7 @@ pub mod boom {
         explosion.round_id = round_id;
         explosion.cap_hash = cap_hash;
         explosion.revealed_cap = 0;
-        explosion.explosion_deadline = explosion_deadline;
+        explosion.explosion_deadline = 0; // Not set until start_explosion_timer
         explosion.is_exploded = false;
         explosion.explosion_time = 0;
         explosion.explosion_reason = ExplosionReason::None;
@@ -490,7 +489,35 @@ pub mod boom {
 
         emit!(ExplosionInitialized {
             round_id,
-            deadline: explosion_deadline,
+            deadline: 0, // Timer not started
+        });
+
+        Ok(())
+    }
+
+    /// Start the explosion timer - call this AFTER LP is created
+    /// Sets deadline = now + duration_seconds
+    pub fn start_explosion_timer(
+        ctx: Context<StartExplosionTimer>,
+        duration_seconds: i64,
+    ) -> Result<()> {
+        let explosion = &mut ctx.accounts.presale_explosion;
+        let clock = Clock::get()?;
+
+        require!(!explosion.is_exploded, BoomError::AlreadyExploded);
+        require!(explosion.explosion_deadline == 0, BoomError::DeadlineAlreadySet);
+        require!(duration_seconds > 0, BoomError::InvalidDuration);
+
+        // LP must be registered before starting timer
+        // (validated by account constraint on lp_info)
+
+        let deadline = clock.unix_timestamp + duration_seconds;
+        explosion.explosion_deadline = deadline;
+
+        emit!(TimerStarted {
+            round_id: explosion.round_id,
+            duration_seconds,
+            deadline,
         });
 
         Ok(())
@@ -1142,6 +1169,26 @@ pub struct InitPresaleExplosion<'info> {
 }
 
 #[derive(Accounts)]
+pub struct StartExplosionTimer<'info> {
+    #[account(
+        mut,
+        seeds = [b"presale_explosion", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump = presale_explosion.bump
+    )]
+    pub presale_explosion: Account<'info, PresaleExplosion>,
+
+    /// LP must be registered before starting timer
+    #[account(
+        seeds = [b"lp_info", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump = lp_info.bump
+    )]
+    pub lp_info: Account<'info, LpInfo>,
+
+    /// Authority that can start the timer
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct TriggerPresaleExplosion<'info> {
     #[account(
         mut,
@@ -1567,6 +1614,13 @@ pub struct ExplosionInitialized {
 }
 
 #[event]
+pub struct TimerStarted {
+    pub round_id: u64,
+    pub duration_seconds: i64,
+    pub deadline: i64,
+}
+
+#[event]
 pub struct PresaleExplosionTriggered {
     pub round_id: u64,
     pub reason: ExplosionReason,
@@ -1672,4 +1726,6 @@ pub enum BoomError {
     InvalidRoundSequence,
     #[msg("Auto-advance is disabled")]
     AutoAdvanceDisabled,
+    #[msg("Duration must be positive")]
+    InvalidDuration,
 }
