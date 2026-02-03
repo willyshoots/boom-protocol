@@ -398,6 +398,37 @@ pub mod boom {
         Ok(())
     }
 
+    /// Register an externally-created Token2022 mint (e.g., with transfer hook)
+    /// Use this when the mint is created via script with extensions
+    pub fn register_presale_token(
+        ctx: Context<RegisterPresaleToken>,
+        round_id: u64,
+        total_supply: u64,
+        tokens_per_winner: u64,
+    ) -> Result<()> {
+        let presale = &ctx.accounts.presale_round;
+
+        // Validate presale is finalized
+        require!(presale.is_finalized, BoomError::PresaleNotFinalized);
+
+        // Initialize presale token state (mint already exists)
+        let presale_token = &mut ctx.accounts.presale_token;
+        presale_token.round_id = round_id;
+        presale_token.mint = ctx.accounts.mint.key();
+        presale_token.total_supply = total_supply;
+        presale_token.tokens_per_winner = tokens_per_winner;
+        presale_token.bump = ctx.bumps.presale_token;
+
+        emit!(PresaleTokenCreated {
+            round_id,
+            mint: ctx.accounts.mint.key(),
+            total_supply,
+            tokens_per_winner,
+        });
+
+        Ok(())
+    }
+
     // NOTE: On-chain Raydium CPI removed to reduce program size
     // LP creation is done via Raydium SDK script, then registered here
 
@@ -666,6 +697,34 @@ pub struct CreatePresaleToken<'info> {
     pub authority: Signer<'info>,
 
     pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(round_id: u64)]
+pub struct RegisterPresaleToken<'info> {
+    #[account(
+        seeds = [b"presale", round_id.to_le_bytes().as_ref()],
+        bump = presale_round.bump,
+        has_one = authority
+    )]
+    pub presale_round: Account<'info, PresaleRound>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + PresaleToken::INIT_SPACE,
+        seeds = [b"presale_token", round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub presale_token: Account<'info, PresaleToken>,
+
+    /// The externally-created Token2022 mint (with transfer hook)
+    pub mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
