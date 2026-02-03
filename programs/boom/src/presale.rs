@@ -242,7 +242,7 @@ pub fn open_presale(ctx: Context<OpenPresale>, cooldown_seconds: i64, winner_cou
     presale.winner_count = winner_count;
     presale.winner_allocation = winner_allocation;
     presale.token_mint = Pubkey::default();
-    presale.bump = ctx.bumps.presale;
+    presale.bump = *ctx.bumps.get("presale").unwrap();
     
     emit!(PresaleOpened {
         round: presale.round,
@@ -281,7 +281,7 @@ pub fn deposit_presale(ctx: Context<DepositPresale>, amount: u64) -> Result<()> 
     deposit.claimed_allocation = false;
     deposit.claimed_refund = false;
     deposit.deposited_at = clock.unix_timestamp;
-    deposit.bump = ctx.bumps.deposit;
+    deposit.bump = *ctx.bumps.get("deposit").unwrap();
     
     presale.total_deposited += amount;
     presale.depositor_count += 1;

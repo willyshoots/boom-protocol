@@ -3,13 +3,13 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-boom = "BOOM111111111111111111111111111111111111111"
+boom = "ibGDrayoCDogt4o3jdqc3VNjjkELTLCyAg51fBgg8cV"
 
 [programs.devnet]
-boom = "BOOM111111111111111111111111111111111111111"
+boom = "ibGDrayoCDogt4o3jdqc3VNjjkELTLCyAg51fBgg8cV"
 
 [programs.mainnet]
-boom = "BOOM111111111111111111111111111111111111111"
+boom = "ibGDrayoCDogt4o3jdqc3VNjjkELTLCyAg51fBgg8cV"
 
 [registry]
 url = "https://api.apr.dev"
