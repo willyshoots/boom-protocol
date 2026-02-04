@@ -7,7 +7,6 @@ import {
   BuySellPanel,
   RecentExplosions,
   PresalePanel,
-  AdminPanel,
   ExplosionOverlay,
   WalletNotInstalled,
   DexScreenerWidget
@@ -34,7 +33,6 @@ export default function Home() {
   const [isExploding, setIsExploding] = useState(false);
   const [showWalletNotInstalled, setShowWalletNotInstalled] = useState(false);
   const [currentRound, setCurrentRound] = useState(1);
-  const [showAdmin, setShowAdmin] = useState(false);
   
   // Mock: presale status - in reality this comes from on-chain data
   // For demo, presale is "closed" when viewing a finalized round
@@ -96,16 +94,7 @@ export default function Home() {
               
               <PresalePanel roundId={currentRound} />
             </div>
-            
-            {/* Admin toggle */}
-            <button
-              onClick={() => setShowAdmin(!showAdmin)}
-              className="w-full py-2 text-sm text-gray-400 hover:text-white border border-gray-700 rounded-lg hover:border-gray-600 transition-colors"
-            >
-              {showAdmin ? '🔼 Hide Admin Panel' : '🔐 Show Admin Panel'}
-            </button>
-            
-            {showAdmin && <AdminPanel />}
+
           </div>
 
           {/* Right: Sidebar */}
