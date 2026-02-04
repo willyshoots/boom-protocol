@@ -8,7 +8,7 @@
  */
 
 import { Raydium, DEVNET_PROGRAM_ID, getCpmmPdaAmmConfigId } from '@raydium-io/raydium-sdk-v2';
-import { Connection, Keypair, PublicKey, clusterApiUrl } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, clusterApiUrl, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 // @ts-ignore
 import BN from 'bn.js';
@@ -67,7 +67,7 @@ async function createLP(roundId: number) {
   const presaleData = presaleRoundInfo.data.slice(8);
   const authority = new PublicKey(presaleData.slice(0, 32));
   const storedRoundId = new BN(presaleData.slice(32, 40), 'le');
-  const totalDeposited = new BN(presaleData.slice(72, 80), 'le'); // offset for total_deposited
+  const totalDeposited = new BN(presaleData.slice(76, 84), 'le'); // offset for total_deposited (after authority 32 + round_id 8 + start_time 8 + end_time 8 + lottery_spots 4 + min_deposit 8 + max_deposit 8 = 76)
   const isFinalized = presaleData[88] === 1; // offset for is_finalized
 
   console.log('Authority:', authority.toBase58());
@@ -131,10 +131,11 @@ async function createLP(roundId: number) {
   };
 
   // Calculate LP amounts based on tokenomics:
-  // - SOL side: Use presale SOL (winner deposits)
+  // - SOL side: Use wallet SOL (for hackathon test, we use 0.5 SOL)
   // - Token side: 90% of total supply goes to LP
-  const solAmount = totalDeposited; // All winner SOL goes to LP
-  const tokenAmount = totalSupply.mul(new BN(90)).div(new BN(100)); // 90% to LP
+  // Note: In production, presale SOL would be transferred from PDA first
+  const solAmount = new BN(500000000); // 0.5 SOL for test (500M lamports)
+  const tokenAmount = new BN('100000000000000000'); // 100M tokens with 9 decimals
 
   console.log('\n💰 LP Amounts:');
   console.log('SOL:', solAmount.toString(), 'lamports (~', solAmount.div(new BN(1e9)).toString(), 'SOL)');

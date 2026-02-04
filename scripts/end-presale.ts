@@ -169,10 +169,9 @@ async function endPresale(roundId: number) {
   console.log('\n👥 Found depositors:', depositors.length);
   depositors.forEach((d, i) => console.log(`  ${i + 1}. ${d.toBase58()}`));
 
-  // Get recent slot hash for randomness seed
-  const slot = await connection.getSlot();
-  const slotHash = await connection.getBlockhash(slot);
-  const seed = Buffer.from(slotHash, 'base64');
+  // Get recent blockhash for randomness seed
+  const { blockhash } = await connection.getLatestBlockhash();
+  const seed = Buffer.from(blockhash);
 
   // Select winners
   const numWinners = Math.min(presale.lotterySpots, depositors.length);
