@@ -11,7 +11,7 @@
  * During steps 1-4, NO transfers are possible (TradingNotEnabled)
  * Step 5 enables trading for everyone simultaneously = fair launch
  * 
- * Usage: npx ts-node scripts/atomic-launch.ts <round_id> [--mainnet]
+ * Usage: npx ts-node scripts/atomic-launch.ts <round_id> [--mainnet] [--name=TOKEN_NAME] [--symbol=TKN] [--uri=METADATA_URI]
  */
 
 import { 
@@ -29,11 +29,19 @@ import {
   ExtensionType,
   createInitializeMintInstruction,
   createInitializeTransferHookInstruction,
+  createInitializeMetadataPointerInstruction,
   getMintLen,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
+  TYPE_SIZE,
+  LENGTH_SIZE,
 } from '@solana/spl-token';
+import {
+  createInitializeInstruction,
+  pack,
+  TokenMetadata,
+} from '@solana/spl-token-metadata';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
@@ -52,6 +60,9 @@ const WINNER_PERCENTAGE = 10; // 10% to winners
 const args = process.argv.slice(2);
 const roundId = parseInt(args[0] || '1');
 const isMainnet = args.includes('--mainnet');
+const tokenName = args.find(a => a.startsWith('--name='))?.split('=')[1] || 'BOOM Token';
+const tokenSymbol = args.find(a => a.startsWith('--symbol='))?.split('=')[1] || 'BOOM';
+const tokenUri = args.find(a => a.startsWith('--uri='))?.split('=')[1] || '';
 const RPC_URL = isMainnet 
   ? 'https://api.mainnet-beta.solana.com'
   : 'https://api.devnet.solana.com';
@@ -164,25 +175,40 @@ async function atomicLaunch(roundId: number) {
     console.log('\n✅ Step 1: Presale already finalized');
   }
 
-  // ==================== STEP 2: Create Token2022 with Transfer Hook ====================
-  console.log('\n🪙 Step 2: Creating Token2022 with transfer hook...');
+  // ==================== STEP 2: Create Token2022 with Transfer Hook + Metadata ====================
+  console.log('\n🪙 Step 2: Creating Token2022 with transfer hook + metadata...');
+  console.log(`   Name: ${tokenName}`);
+  console.log(`   Symbol: ${tokenSymbol}`);
   
   const mintKeypair = Keypair.generate();
   const mint = mintKeypair.publicKey;
   console.log(`   Mint: ${mint.toBase58()}`);
 
-  // Calculate mint account size with transfer hook extension
-  const mintLen = getMintLen([ExtensionType.TransferHook]);
-  const mintRent = await connection.getMinimumBalanceForRentExemption(mintLen);
+  // Build metadata
+  const metadata: TokenMetadata = {
+    mint: mint,
+    name: tokenName,
+    symbol: tokenSymbol,
+    uri: tokenUri,
+    additionalMetadata: [],
+  };
+  const metadataLen = pack(metadata).length;
+
+  // Calculate mint account size with both extensions
+  const mintLen = getMintLen([ExtensionType.TransferHook, ExtensionType.MetadataPointer]);
+  // Total space = mint + metadata extension header + metadata content
+  const totalSpace = mintLen + TYPE_SIZE + LENGTH_SIZE + metadataLen;
+  const mintRent = await connection.getMinimumBalanceForRentExemption(totalSpace);
 
   const createMintAccountIx = SystemProgram.createAccount({
     fromPubkey: wallet.publicKey,
     newAccountPubkey: mint,
-    space: mintLen,
+    space: totalSpace,
     lamports: mintRent,
     programId: TOKEN_2022_PROGRAM_ID,
   });
 
+  // Initialize transfer hook extension
   const initTransferHookIx = createInitializeTransferHookInstruction(
     mint,
     wallet.publicKey,
@@ -190,6 +216,15 @@ async function atomicLaunch(roundId: number) {
     TOKEN_2022_PROGRAM_ID
   );
 
+  // Initialize metadata pointer (points to itself)
+  const initMetadataPointerIx = createInitializeMetadataPointerInstruction(
+    mint,
+    wallet.publicKey,
+    mint, // metadata stored in mint account itself
+    TOKEN_2022_PROGRAM_ID
+  );
+
+  // Initialize the mint
   const initMintIx = createInitializeMintInstruction(
     mint,
     TOKEN_DECIMALS,
@@ -198,9 +233,27 @@ async function atomicLaunch(roundId: number) {
     TOKEN_2022_PROGRAM_ID
   );
 
-  const tx2 = new Transaction().add(createMintAccountIx, initTransferHookIx, initMintIx);
+  // Initialize the metadata
+  const initMetadataIx = createInitializeInstruction({
+    programId: TOKEN_2022_PROGRAM_ID,
+    mint: mint,
+    metadata: mint,
+    name: metadata.name,
+    symbol: metadata.symbol,
+    uri: metadata.uri,
+    mintAuthority: wallet.publicKey,
+    updateAuthority: wallet.publicKey,
+  });
+
+  const tx2 = new Transaction().add(
+    createMintAccountIx, 
+    initTransferHookIx, 
+    initMetadataPointerIx,
+    initMintIx,
+    initMetadataIx
+  );
   const sig2 = await sendAndConfirmTransaction(connection, tx2, [wallet, mintKeypair]);
-  console.log(`   ✅ Token created: ${sig2}`);
+  console.log(`   ✅ Token created with metadata: ${sig2}`);
 
   // ==================== STEP 3: Initialize Hook PDAs ====================
   console.log('\n🔧 Step 3: Initializing hook PDAs...');
