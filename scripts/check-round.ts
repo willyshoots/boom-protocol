@@ -4,7 +4,7 @@ const PROGRAM_ID = new PublicKey('GC56De2SrwjGsCCFimwqxzxwjpHBEsubP3AV1yXwVtrn')
 
 async function main() {
   const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
-  const roundId = 1;
+  const roundId = parseInt(process.argv[2] || '1');
 
   // Derive PDAs
   const roundIdBuf = Buffer.alloc(8);

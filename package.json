@@ -1,4 +1,7 @@
 {
+  "name": "boom-protocol",
+  "private": true,
+  "description": "BOOM Protocol - Solana presale/lottery with exploding tokens",
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
     "@raydium-io/raydium-sdk-v2": "^0.2.32-alpha",

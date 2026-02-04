@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   // Enable standalone output for Vercel
@@ -9,8 +10,11 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
   
-  // Empty turbopack config to use defaults (silences webpack warning)
-  turbopack: {},
+  // Explicitly set turbopack root to frontend directory
+  // This prevents confusion from parent lockfiles
+  turbopack: {
+    root: path.resolve(__dirname),
+  },
 };
 
 export default nextConfig;

@@ -10,6 +10,7 @@
 import { Raydium, DEVNET_PROGRAM_ID, getCpmmPdaAmmConfigId } from '@raydium-io/raydium-sdk-v2';
 import { Connection, Keypair, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import { TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+// @ts-ignore
 import BN from 'bn.js';
 import fs from 'fs';
 import path from 'path';
@@ -156,6 +157,7 @@ async function createLP(roundId: number) {
       ownerInfo: {
         useSOLBalance: true,
       },
+      // @ts-ignore
       txVersion: 'V0', // Use versioned transactions
     });
 
@@ -176,8 +178,8 @@ async function createLP(roundId: number) {
       txId,
       poolId: extInfo.address.poolId?.toString(),
       lpMint: extInfo.address.lpMint?.toString(),
-      vault0: extInfo.address.vault0?.toString(),
-      vault1: extInfo.address.vault1?.toString(),
+      vaultA: extInfo.address.vaultA?.toString(),
+      vaultB: extInfo.address.vaultB?.toString(),
     };
 
   } catch (error: any) {
