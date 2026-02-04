@@ -32,18 +32,16 @@ export default function Home() {
   useWallet(); // Keep hook for wallet connection
   const [isExploding, setIsExploding] = useState(false);
   const [showWalletNotInstalled, setShowWalletNotInstalled] = useState(false);
-  const [currentRound, setCurrentRound] = useState(1);
+  const [currentRound, setCurrentRound] = useState(10);
   
   // Mock: presale status - in reality this comes from on-chain data
   // For demo, presale is "closed" when viewing a finalized round
-  const [presaleOpen, setPresaleOpen] = useState(false);
+  const [presaleOpen, setPresaleOpen] = useState(true);
 
   // Update presale status based on round selection
-  // Round 1 is finalized, so presale is closed
-  // Round 2+ might be active
   useEffect(() => {
-    // This would come from on-chain data in production
-    setPresaleOpen(currentRound > 1);
+    // Round 10 is our active test round
+    setPresaleOpen(currentRound >= 10);
   }, [currentRound]);
 
   const handleExplosionClose = () => {
