@@ -32,7 +32,7 @@ export default function Home() {
   useWallet(); // Keep hook for wallet connection
   const [isExploding, setIsExploding] = useState(false);
   const [showWalletNotInstalled, setShowWalletNotInstalled] = useState(false);
-  const [currentRound, setCurrentRound] = useState(10);
+  const [currentRound, setCurrentRound] = useState(11);
   
   // Mock: presale status - in reality this comes from on-chain data
   // For demo, presale is "closed" when viewing a finalized round

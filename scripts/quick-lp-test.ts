@@ -43,8 +43,8 @@ function encodeU32(value: number): Buffer {
 async function startQuickTestRound() {
   const connection = new Connection('https://api.devnet.solana.com', 'confirmed');
   
-  // Use round 10 to avoid conflicts with existing rounds
-  const roundId = 10;
+  // Use round 11 for fresh test
+  const roundId = 11;
   
   console.log('🧪 QUICK LP TEST ROUND');
   console.log('='.repeat(50));
@@ -58,8 +58,8 @@ async function startQuickTestRound() {
     PROGRAM_ID
   );
 
-  // TEST CONFIG - very short times, low amounts
-  const cooldownSeconds = 2 * 60; // 2 minutes for quick testing
+  // TEST CONFIG - short time, low amounts
+  const cooldownSeconds = 5 * 60; // 5 minutes for testing
   const lotterySpots = 5;         // Everyone wins
   const minDeposit = 0.01 * LAMPORTS_PER_SOL;  // 0.01 SOL minimum
   const maxDeposit = 0.5 * LAMPORTS_PER_SOL;   // 0.5 SOL maximum
