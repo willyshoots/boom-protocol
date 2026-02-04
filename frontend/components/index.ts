@@ -12,3 +12,4 @@ export { WalletNotInstalled } from './WalletNotInstalled';
 export { CountdownTimer, FundingCountdown, ExplosionCountdown } from './CountdownTimer';
 export { ExplosionStatus } from './ExplosionStatus';
 export { ClaimPayout } from './ClaimPayout';
+export { DexScreenerWidget } from './DexScreenerWidget';

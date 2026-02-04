@@ -13,7 +13,8 @@ import {
   ExplosionOverlay,
   WalletNotInstalled,
   ExplosionStatus,
-  ClaimPayout
+  ClaimPayout,
+  DexScreenerWidget
 } from '@/components';
 import { RoundSelector } from '@/components/RoundSelector';
 
@@ -176,6 +177,8 @@ export default function Home() {
               <ExplosionStatus roundId={currentRound} />
               {/* Claim Payout - shows after explosion + LP unwind */}
               <ClaimPayout roundId={currentRound} />
+              {/* DexScreener - shows live chart after token creation */}
+              <DexScreenerWidget roundId={currentRound} />
               <RecentExplosions explosions={MOCK_EXPLOSIONS} />
             </div>
           </div>
