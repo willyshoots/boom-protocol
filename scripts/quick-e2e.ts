@@ -19,12 +19,14 @@ import {
   getMintLen,
   createInitializeMintInstruction,
   createInitializeTransferHookInstruction,
+  createInitializeMetadataPointerInstruction,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
   addExtraAccountMetasForExecute,
   createTransferCheckedInstruction,
 } from '@solana/spl-token';
+// Note: tokenMetadataInitializeWithRentTransfer is imported dynamically below
 import BN from 'bn.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -174,17 +176,28 @@ async function main() {
     console.log(`  ⚠️ Finalize error: ${e.message.slice(0, 150)}\n`);
   }
 
-  // === STEP 5: Create Token2022 with hook ===
-  console.log('📝 Step 5: Creating Token2022 with transfer hook...');
+  // === STEP 5: Create Token2022 with hook + metadata ===
+  console.log('📝 Step 5: Creating Token2022 with transfer hook + metadata...');
   
   const mintKeypair = Keypair.generate();
   const mint = mintKeypair.publicKey;
   console.log(`  Mint: ${mint.toBase58()}`);
 
-  const mintLen = getMintLen([ExtensionType.TransferHook]);
+  // Token metadata
+  const tokenName = `BOOM Round ${roundId}`;
+  const tokenSymbol = 'BOOM';
+  const tokenUri = ''; // Could add IPFS URI for token image later
+
+  // Calculate mint account size with fixed extensions only
+  // TokenMetadata will be added via reallocate after mint init
+  const mintLen = getMintLen([ExtensionType.TransferHook, ExtensionType.MetadataPointer]);
   const mintRent = await connection.getMinimumBalanceForRentExemption(mintLen);
 
-  // Use mint authority PDA so program can mint
+  console.log(`  Name: ${tokenName}`);
+  console.log(`  Symbol: ${tokenSymbol}`);
+  console.log(`  Account size: ${mintLen} bytes (before metadata)`);
+
+  // Step 5a: Create mint account with MetadataPointer + TransferHook + Mint
   await sendAndConfirmTransaction(
     connection,
     new Transaction().add(
@@ -195,12 +208,31 @@ async function main() {
         lamports: mintRent,
         programId: TOKEN_2022_PROGRAM_ID,
       }),
+      createInitializeMetadataPointerInstruction(mint, wallet.publicKey, mint, TOKEN_2022_PROGRAM_ID),
       createInitializeTransferHookInstruction(mint, wallet.publicKey, HOOK_PROGRAM_ID, TOKEN_2022_PROGRAM_ID),
       createInitializeMintInstruction(mint, TOKEN_DECIMALS, wallet.publicKey, wallet.publicKey, TOKEN_2022_PROGRAM_ID)
     ),
     [wallet, mintKeypair]
   );
-  console.log('  ✅ Token created\n');
+  console.log('  ✅ Token created');
+
+  // Step 5b: Initialize metadata with rent transfer (auto-reallocates account)
+  // tokenMetadataInitializeWithRentTransfer handles reallocation for us
+  const { tokenMetadataInitializeWithRentTransfer } = await import('@solana/spl-token');
+  await tokenMetadataInitializeWithRentTransfer(
+    connection,
+    wallet,
+    mint,
+    wallet.publicKey,  // updateAuthority
+    wallet.publicKey,  // mintAuthority
+    tokenName,
+    tokenSymbol,
+    tokenUri,
+    [],  // multiSigners
+    { commitment: 'confirmed' },
+    TOKEN_2022_PROGRAM_ID
+  );
+  console.log('  ✅ Metadata initialized\n');
 
   // Init hook extra metas
   const [extraMetasPda] = PublicKey.findProgramAddressSync([Buffer.from('extra-account-metas'), mint.toBuffer()], HOOK_PROGRAM_ID);
