@@ -34,7 +34,8 @@ import {
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
 import * as anchor from '@coral-xyz/anchor';
-import { Program, AnchorProvider, BN } from '@coral-xyz/anchor';
+import { Program, AnchorProvider } from '@coral-xyz/anchor';
+import BN from 'bn.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';

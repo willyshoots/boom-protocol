@@ -513,6 +513,9 @@ dependencies = [
  "anchor-lang",
  "anchor-spl",
  "pyth-solana-receiver-sdk",
+ "solana-program",
+ "spl-token-2022",
+ "spl-transfer-hook-interface",
 ]
 
 [[package]]

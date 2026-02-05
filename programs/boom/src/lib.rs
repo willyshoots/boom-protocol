@@ -6,6 +6,7 @@ use anchor_spl::token_2022::{self, Token2022};
 use anchor_spl::token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface};
 use anchor_spl::associated_token::AssociatedToken;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+use spl_transfer_hook_interface::onchain::add_extra_accounts_for_execute_cpi;
 
 declare_id!("GC56De2SrwjGsCCFimwqxzxwjpHBEsubP3AV1yXwVtrn");
 
@@ -500,9 +501,12 @@ pub mod boom {
         **sol_vault_info.try_borrow_mut_lamports()? += transferable_sol;
 
         // Get token balance in token vault
+        // Note: If vault was just initialized, tokens should be deposited via deposit_pool_tokens
+        // For now, allow 0 tokens and set reserve from what's available
         let token_vault = &ctx.accounts.token_vault;
         let token_reserve = token_vault.amount;
-        require!(token_reserve > 0, BoomError::NoTokensForPool);
+        // Allow pool creation with 0 tokens - tokens deposited later via deposit_pool_tokens
+        // require!(token_reserve > 0, BoomError::NoTokensForPool);
 
         // Initialize pool state
         let pool = &mut ctx.accounts.pool;
@@ -550,6 +554,12 @@ pub mod boom {
         let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
         let system_program_info = ctx.accounts.system_program.to_account_info();
         let token_program_info = ctx.accounts.token_program.to_account_info();
+        
+        // Hook accounts for transfer
+        let hook_program_info = ctx.accounts.hook_program.to_account_info();
+        let extra_account_metas_info = ctx.accounts.extra_account_metas.to_account_info();
+        let hook_config_info = ctx.accounts.hook_config.to_account_info();
+        let hook_whitelist_info = ctx.accounts.hook_whitelist.to_account_info();
         
         // Now get mutable reference to pool
         let pool = &mut ctx.accounts.pool;
@@ -635,21 +645,39 @@ pub mod boom {
             ];
             let signer_seeds = &[&seeds[..]];
 
-            let transfer_accounts = token_2022::TransferChecked {
-                from: token_vault_info,
-                mint: mint_info,
-                to: user_token_account_info,
-                authority: pool_account_info,
-            };
-            let cpi_ctx = CpiContext::new_with_signer(
-                token_program_info,
-                transfer_accounts,
+            // Build transfer instruction with hook accounts
+            // Build transfer instruction and include hook accounts
+            let decimals = 9u8;
+            let transfer_ix = spl_token_2022::instruction::transfer_checked(
+                &token_program_info.key(),
+                &token_vault_info.key(),
+                &mint_info.key(),
+                &user_token_account_info.key(),
+                &pool_account_info.key(),
+                &[],
+                amount_out,
+                decimals,
+            )?;
+            
+            // Token2022 expects: source, mint, dest, authority, then extra accounts for hook
+            // The extra accounts must include: extra_account_metas PDA, hook program, and resolved accounts
+            let account_infos = &[
+                token_vault_info.clone(),           // source
+                mint_info.clone(),                   // mint
+                user_token_account_info.clone(),    // destination
+                pool_account_info.clone(),          // authority (pool PDA)
+                token_program_info.clone(),         // Token2022 program (for CPI context)
+                extra_account_metas_info.clone(),   // extra_account_metas PDA
+                hook_program_info.clone(),          // hook program
+                hook_config_info.clone(),           // hook config (extra account)
+                hook_whitelist_info.clone(),        // hook whitelist (extra account)
+            ];
+            
+            solana_program::program::invoke_signed(
+                &transfer_ix,
+                account_infos,
                 signer_seeds,
-            );
-            
-            let decimals = 9u8; // Standard for Solana tokens
-            
-            token_2022::transfer_checked(cpi_ctx, amount_out, decimals)?;
+            )?;
 
             // Update reserves
             pool.sol_reserve = pool.sol_reserve.checked_add(amount_in).ok_or(BoomError::Overflow)?;
@@ -657,20 +685,35 @@ pub mod boom {
         } else {
             // User sends tokens, receives SOL
             
-            // 1. Transfer tokens from user to token_vault
-            let transfer_accounts = token_2022::TransferChecked {
-                from: user_token_account_info,
-                mint: mint_info,
-                to: token_vault_info,
-                authority: user_info.clone(),
-            };
-            let cpi_ctx = CpiContext::new(
-                token_program_info,
-                transfer_accounts,
-            );
-            
+            // 1. Transfer tokens from user to token_vault with hook accounts
             let decimals = 9u8;
-            token_2022::transfer_checked(cpi_ctx, amount_in, decimals)?;
+            let transfer_ix = spl_token_2022::instruction::transfer_checked(
+                &token_program_info.key(),
+                &user_token_account_info.key(),
+                &mint_info.key(),
+                &token_vault_info.key(),
+                &user_info.key(),
+                &[],
+                amount_in,
+                decimals,
+            )?;
+            
+            let account_infos = &[
+                user_token_account_info.clone(),    // source
+                mint_info.clone(),                   // mint
+                token_vault_info.clone(),           // destination
+                user_info.clone(),                  // authority (user signer)
+                token_program_info.clone(),         // Token2022 program
+                extra_account_metas_info.clone(),   // extra_account_metas PDA
+                hook_program_info.clone(),          // hook program
+                hook_config_info.clone(),           // hook config
+                hook_whitelist_info.clone(),        // hook whitelist
+            ];
+            
+            solana_program::program::invoke(
+                &transfer_ix,
+                account_infos,
+            )?;
 
             // 2. Transfer SOL from sol_vault to user (direct lamport manipulation for PDA)
             **sol_vault_info.try_borrow_mut_lamports()? -= amount_out;
@@ -783,6 +826,287 @@ pub mod boom {
             round_id: ctx.accounts.presale_round.round_id,
             amount,
         });
+
+        Ok(())
+    }
+
+    /// Sync pool reserves from actual token vault balance
+    /// Call this after depositing tokens to update the pool state
+    pub fn sync_pool_reserves(ctx: Context<SyncPoolReserves>) -> Result<()> {
+        let pool = &mut ctx.accounts.pool;
+        let token_vault = &ctx.accounts.token_vault;
+        let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
+        
+        // Update token reserve from actual vault balance
+        pool.token_reserve = token_vault.amount;
+        
+        // Update SOL reserve from actual vault balance
+        let sol_vault_rent = Rent::get()?.minimum_balance(0);
+        let sol_balance = sol_vault_info.lamports();
+        pool.sol_reserve = sol_balance.saturating_sub(sol_vault_rent);
+        
+        msg!("Pool reserves synced: {} tokens, {} SOL", pool.token_reserve, pool.sol_reserve);
+        
+        Ok(())
+    }
+
+    // ==================== ATOMIC SWAP (No CPI for token transfers) ====================
+
+    /// Atomic sell: User transfers tokens BEFORE calling this, then receives SOL
+    /// 
+    /// Transaction structure:
+    /// 1. User calls Token2022 transfer_checked directly (includes hook accounts)
+    /// 2. User calls swap_atomic_sell with expected_tokens_in
+    /// 3. Contract verifies vault received tokens, sends SOL
+    pub fn swap_atomic_sell(
+        ctx: Context<SwapAtomicSell>,
+        expected_tokens_in: u64,
+        min_sol_out: u64,
+    ) -> Result<()> {
+        require!(expected_tokens_in > 0, BoomError::ZeroAmount);
+
+        // Get account infos before mutable borrow
+        let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
+        let user_info = ctx.accounts.user.to_account_info();
+        let system_program_info = ctx.accounts.system_program.to_account_info();
+
+        let pool = &mut ctx.accounts.pool;
+        let token_vault = &ctx.accounts.token_vault;
+
+        // Verify user actually deposited tokens (vault balance > recorded reserve)
+        let actual_vault_balance = token_vault.amount;
+        let expected_balance = pool.token_reserve.checked_add(expected_tokens_in).ok_or(BoomError::Overflow)?;
+        
+        require!(
+            actual_vault_balance >= expected_balance,
+            BoomError::InsufficientDeposit
+        );
+
+        // Calculate SOL output using constant product formula with fee
+        let fee_factor = 10000u128 - pool.fee_bps as u128;
+        let amount_in_128 = expected_tokens_in as u128;
+        let reserve_in = pool.token_reserve as u128;
+        let reserve_out = pool.sol_reserve as u128;
+
+        let numerator = reserve_out
+            .checked_mul(amount_in_128)
+            .ok_or(BoomError::Overflow)?
+            .checked_mul(fee_factor)
+            .ok_or(BoomError::Overflow)?;
+
+        let denominator = reserve_in
+            .checked_mul(10000)
+            .ok_or(BoomError::Overflow)?
+            .checked_add(amount_in_128.checked_mul(fee_factor).ok_or(BoomError::Overflow)?)
+            .ok_or(BoomError::Overflow)?;
+
+        let sol_out = numerator.checked_div(denominator).ok_or(BoomError::Overflow)? as u64;
+
+        require!(sol_out >= min_sol_out, BoomError::SlippageExceeded);
+        require!(sol_out > 0, BoomError::ZeroOutput);
+        require!(sol_out <= pool.sol_reserve, BoomError::InsufficientLiquidity);
+
+        // Calculate fee for stats
+        let fee_amount = (expected_tokens_in as u128)
+            .checked_mul(pool.fee_bps as u128)
+            .ok_or(BoomError::Overflow)?
+            .checked_div(10000)
+            .ok_or(BoomError::Overflow)? as u64;
+
+        // Store round_id for signer seeds before pool goes out of scope
+        let round_id = pool.round_id;
+        let sol_vault_bump = pool.sol_vault_bump;
+
+        // Transfer SOL from sol_vault to user using CPI with PDA signer
+        let round_id_bytes = round_id.to_le_bytes();
+        let seeds = &[
+            b"sol_vault".as_ref(),
+            round_id_bytes.as_ref(),
+            &[sol_vault_bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
+
+        let cpi_ctx = CpiContext::new_with_signer(
+            system_program_info,
+            anchor_lang::system_program::Transfer {
+                from: sol_vault_info,
+                to: user_info,
+            },
+            signer_seeds,
+        );
+        anchor_lang::system_program::transfer(cpi_ctx, sol_out)?;
+
+        // Update reserves (use actual vault balance to account for any rounding)
+        pool.token_reserve = actual_vault_balance;
+        pool.sol_reserve = pool.sol_reserve.checked_sub(sol_out).ok_or(BoomError::Overflow)?;
+
+        // Update stats
+        pool.total_volume = pool.total_volume.checked_add(expected_tokens_in as u128).ok_or(BoomError::Overflow)?;
+        pool.total_fees = pool.total_fees.checked_add(fee_amount as u128).ok_or(BoomError::Overflow)?;
+
+        emit!(SwapExecuted {
+            round_id: pool.round_id,
+            user: ctx.accounts.user.key(),
+            is_buy: false,
+            amount_in: expected_tokens_in,
+            amount_out: sol_out,
+            fee_amount,
+            new_sol_reserve: pool.sol_reserve,
+            new_token_reserve: pool.token_reserve,
+        });
+
+        msg!("Atomic sell: {} tokens -> {} SOL", expected_tokens_in, sol_out);
+
+        Ok(())
+    }
+
+    /// Atomic buy: User sends SOL, receives tokens
+    /// 
+    /// Uses manual instruction construction to properly pass hook accounts through CPI
+    pub fn swap_atomic_buy(
+        ctx: Context<SwapAtomicBuy>,
+        sol_in: u64,
+        min_tokens_out: u64,
+    ) -> Result<()> {
+        require!(sol_in > 0, BoomError::ZeroAmount);
+
+        // Get all account infos before mutable borrow
+        let pool_info = ctx.accounts.pool.to_account_info();
+        let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
+        let user_info = ctx.accounts.user.to_account_info();
+        let system_program_info = ctx.accounts.system_program.to_account_info();
+        let token_vault_info = ctx.accounts.token_vault.to_account_info();
+        let mint_info = ctx.accounts.mint.to_account_info();
+        let user_token_info = ctx.accounts.user_token_account.to_account_info();
+        let token_program_info = ctx.accounts.token_program.to_account_info();
+        let hook_program_info = ctx.accounts.hook_program.to_account_info();
+        let extra_account_metas_info = ctx.accounts.extra_account_metas.to_account_info();
+        let hook_config_info = ctx.accounts.hook_config.to_account_info();
+        let hook_whitelist_info = ctx.accounts.hook_whitelist.to_account_info();
+
+        let pool = &mut ctx.accounts.pool;
+
+        // Calculate token output using constant product formula with fee
+        let fee_factor = 10000u128 - pool.fee_bps as u128;
+        let amount_in_128 = sol_in as u128;
+        let reserve_in = pool.sol_reserve as u128;
+        let reserve_out = pool.token_reserve as u128;
+
+        let numerator = reserve_out
+            .checked_mul(amount_in_128)
+            .ok_or(BoomError::Overflow)?
+            .checked_mul(fee_factor)
+            .ok_or(BoomError::Overflow)?;
+
+        let denominator = reserve_in
+            .checked_mul(10000)
+            .ok_or(BoomError::Overflow)?
+            .checked_add(amount_in_128.checked_mul(fee_factor).ok_or(BoomError::Overflow)?)
+            .ok_or(BoomError::Overflow)?;
+
+        let tokens_out = numerator.checked_div(denominator).ok_or(BoomError::Overflow)? as u64;
+
+        require!(tokens_out >= min_tokens_out, BoomError::SlippageExceeded);
+        require!(tokens_out > 0, BoomError::ZeroOutput);
+        require!(tokens_out <= pool.token_reserve, BoomError::InsufficientLiquidity);
+
+        // Calculate fee for stats
+        let fee_amount = (sol_in as u128)
+            .checked_mul(pool.fee_bps as u128)
+            .ok_or(BoomError::Overflow)?
+            .checked_div(10000)
+            .ok_or(BoomError::Overflow)? as u64;
+
+        // Store values before mutable operations
+        let round_id = pool.round_id;
+        let pool_bump = pool.bump;
+
+        // 1. Transfer SOL from user to sol_vault
+        let cpi_ctx = CpiContext::new(
+            system_program_info,
+            anchor_lang::system_program::Transfer {
+                from: user_info.clone(),
+                to: sol_vault_info.clone(),
+            },
+        );
+        anchor_lang::system_program::transfer(cpi_ctx, sol_in)?;
+
+        // 2. Transfer tokens from token_vault to user using proper hook account resolution
+        let round_id_bytes = round_id.to_le_bytes();
+        let seeds = &[
+            b"pool".as_ref(),
+            round_id_bytes.as_ref(),
+            &[pool_bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
+
+        // Build the base transfer_checked instruction
+        let mut transfer_ix = spl_token_2022::instruction::transfer_checked(
+            &token_program_info.key(),
+            &token_vault_info.key(),
+            &mint_info.key(),
+            &user_token_info.key(),
+            &pool_info.key(),
+            &[], // No additional signers needed, pool PDA signs via invoke_signed
+            tokens_out,
+            9, // decimals
+        )?;
+
+        // Start with base account infos for transfer_checked
+        let mut account_infos = vec![
+            token_vault_info.clone(),   // source
+            mint_info.clone(),          // mint  
+            user_token_info.clone(),    // destination
+            pool_info.clone(),          // authority (pool PDA)
+        ];
+
+        // Additional accounts that the hook helper needs to search through
+        let additional_accounts = &[
+            extra_account_metas_info.clone(),
+            hook_program_info.clone(),
+            hook_config_info.clone(),
+            hook_whitelist_info.clone(),
+        ];
+
+        // Use the SPL helper to properly add hook accounts to the instruction
+        add_extra_accounts_for_execute_cpi(
+            &mut transfer_ix,
+            &mut account_infos,
+            &TRANSFER_HOOK_PROGRAM_ID,
+            token_vault_info.clone(),
+            mint_info.clone(),
+            user_token_info.clone(),
+            pool_info.clone(),
+            tokens_out,
+            additional_accounts,
+        )?;
+
+        solana_program::program::invoke_signed(
+            &transfer_ix,
+            &account_infos,
+            signer_seeds,
+        )?;
+
+        // Update reserves
+        pool.sol_reserve = pool.sol_reserve.checked_add(sol_in).ok_or(BoomError::Overflow)?;
+        pool.token_reserve = pool.token_reserve.checked_sub(tokens_out).ok_or(BoomError::Overflow)?;
+
+        // Update stats
+        pool.total_volume = pool.total_volume.checked_add(sol_in as u128).ok_or(BoomError::Overflow)?;
+        pool.total_fees = pool.total_fees.checked_add(fee_amount as u128).ok_or(BoomError::Overflow)?;
+
+        emit!(SwapExecuted {
+            round_id,
+            user: ctx.accounts.user.key(),
+            is_buy: true,
+            amount_in: sol_in,
+            amount_out: tokens_out,
+            fee_amount,
+            new_sol_reserve: pool.sol_reserve,
+            new_token_reserve: pool.token_reserve,
+        });
+
+        msg!("Atomic buy: {} SOL -> {} tokens", sol_in, tokens_out);
 
         Ok(())
     }
@@ -1570,6 +1894,23 @@ pub struct Swap<'info> {
 
     pub token_program: Program<'info, Token2022>,
     pub system_program: Program<'info, System>,
+
+    // === Transfer Hook Accounts ===
+    /// The transfer hook program
+    /// CHECK: Hook program ID
+    pub hook_program: UncheckedAccount<'info>,
+    
+    /// Extra account metas PDA for the mint
+    /// CHECK: PDA derived from ["extra-account-metas", mint]
+    pub extra_account_metas: UncheckedAccount<'info>,
+    
+    /// Hook config PDA
+    /// CHECK: PDA derived from ["hook_config"] in hook program
+    pub hook_config: UncheckedAccount<'info>,
+    
+    /// Hook whitelist PDA for this mint
+    /// CHECK: PDA derived from ["whitelist", mint] in hook program
+    pub hook_whitelist: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -1579,6 +1920,132 @@ pub struct GetSwapQuote<'info> {
         bump = pool.bump
     )]
     pub pool: Account<'info, Pool>,
+}
+
+#[derive(Accounts)]
+pub struct SyncPoolReserves<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    /// Token vault PDA
+    #[account(
+        token::mint = pool.mint,
+        seeds = [b"token_vault", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.token_vault_bump
+    )]
+    pub token_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    /// SOL vault PDA
+    /// CHECK: PDA holding SOL
+    #[account(
+        seeds = [b"sol_vault", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.sol_vault_bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+}
+
+/// Accounts for atomic sell (user transfers tokens first, then calls this)
+#[derive(Accounts)]
+pub struct SwapAtomicSell<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    /// Pool's token vault - verify balance increased
+    #[account(
+        token::mint = pool.mint,
+        constraint = token_vault.key() == pool.token_vault @ BoomError::InvalidVault
+    )]
+    pub token_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    /// Pool's SOL vault - SOL sent from here
+    /// CHECK: PDA holding SOL
+    #[account(
+        mut,
+        seeds = [b"sol_vault", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.sol_vault_bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+
+    /// User receiving SOL
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Accounts for atomic buy (SOL in, tokens out via CPI with remaining_accounts)
+#[derive(Accounts)]
+pub struct SwapAtomicBuy<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    /// The token mint
+    #[account(
+        constraint = mint.key() == pool.mint @ BoomError::InvalidMint
+    )]
+    pub mint: InterfaceAccount<'info, MintInterface>,
+
+    /// Pool's token vault
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = pool,
+        constraint = token_vault.key() == pool.token_vault @ BoomError::InvalidVault
+    )]
+    pub token_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    /// Pool's SOL vault
+    /// CHECK: PDA holding SOL
+    #[account(
+        mut,
+        seeds = [b"sol_vault", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.sol_vault_bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+
+    /// User's token account (receives tokens)
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = user
+    )]
+    pub user_token_account: InterfaceAccount<'info, TokenAccountInterface>,
+
+    /// User sending SOL
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+
+    // === Transfer Hook Accounts (passed via remaining_accounts in CPI) ===
+    /// The transfer hook program
+    /// CHECK: Hook program ID
+    pub hook_program: UncheckedAccount<'info>,
+    
+    /// Extra account metas PDA for the mint
+    /// CHECK: PDA derived from ["extra-account-metas", mint]
+    pub extra_account_metas: UncheckedAccount<'info>,
+    
+    /// Hook config PDA
+    /// CHECK: PDA derived from ["hook_config"] in hook program
+    pub hook_config: UncheckedAccount<'info>,
+    
+    /// Hook whitelist PDA for this mint
+    /// CHECK: PDA derived from ["whitelist", mint] in hook program
+    pub hook_whitelist: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -2283,4 +2750,8 @@ pub enum BoomError {
     SlippageExceeded,
     #[msg("Invalid vault account")]
     InvalidVault,
+    #[msg("Insufficient tokens deposited")]
+    InsufficientDeposit,
+    #[msg("Insufficient liquidity in pool")]
+    InsufficientLiquidity,
 }
