@@ -9,9 +9,10 @@ import { FundingCountdown } from './CountdownTimer';
 
 interface PresalePanelProps {
   roundId?: number;
+  upcomingTicker?: string;
 }
 
-export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1 }) => {
+export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1, upcomingTicker = 'BOOM' }) => {
   const { connected } = useWallet();
   const [amount, setAmount] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -88,57 +89,53 @@ export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1 }) => {
 
   return (
     <div className="boom-card border-2 border-orange-500/50">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-orange-500 to-yellow-500 flex items-center justify-center text-2xl animate-pulse">
-            ⏳
-          </div>
-          <div>
-            <h2 className="text-xl font-bold text-white">PRESALE</h2>
-            <p className="text-sm text-gray-400">Round #{roundId} - Testing Mode</p>
-          </div>
+      {/* Hero Header - Simple and Bold */}
+      <div className="text-center mb-8">
+        <div className="w-20 h-20 mx-auto rounded-full bg-gradient-to-br from-orange-500 to-yellow-500 flex items-center justify-center text-4xl animate-pulse mb-4">
+          💥
+        </div>
+        <h2 className="text-2xl md:text-3xl font-bold text-white mb-2">
+          Be early to the next BOOM
+        </h2>
+        <div className="inline-block px-6 py-2 bg-gradient-to-r from-orange-500/20 to-yellow-500/20 border border-orange-500/50 rounded-full">
+          <span className="text-3xl md:text-4xl font-black bg-gradient-to-r from-orange-400 to-yellow-400 bg-clip-text text-transparent">
+            ${upcomingTicker}
+          </span>
         </div>
       </div>
 
-      {/* Info / Status */}
+      {/* Status Banner */}
       {loading ? (
         <div className="mb-6 p-4 bg-gray-800/50 rounded-lg text-center">
-          <p className="text-gray-400">Loading presale data...</p>
+          <p className="text-gray-400">Loading...</p>
         </div>
-      ) : !roundExists ? (
-        <div className="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <p className="text-yellow-400 text-sm">
-            ⚠️ No active presale round. Use Admin Panel below to:
-            <br />1. Initialize Protocol
-            <br />2. Start Presale
-          </p>
-        </div>
-      ) : !isActive ? (
-        <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <p className="text-red-400 text-sm">
-            ⏰ Presale has ended. {totalDepositors} depositors competed for {lotterySpots} spots.
-          </p>
-          {isFinalized && userDepositSol > 0 && (
-            <p className="text-gray-400 text-sm mt-2">
-              {isWinner 
-                ? hasClaimed 
-                  ? '✅ You won and have claimed your tokens!' 
-                  : '🏆 You WON! Claim your tokens below.'
-                : '😢 You did not win. Claim your refund.'}
-            </p>
-          )}
-        </div>
-      ) : (
-        <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-lg">
+      ) : isActive ? (
+        <div className="mb-6 p-4 bg-green-500/10 border border-green-500/30 rounded-xl">
           <div className="flex items-center justify-between">
-            <p className="text-green-400 text-sm">✅ Presale is LIVE!</p>
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></span>
+              <span className="text-green-400 font-bold">LIVE NOW</span>
+            </div>
             <FundingCountdown 
               endTime={endTime} 
-              className="text-lg font-bold"
+              className="text-lg font-bold text-white"
               onComplete={refresh}
             />
           </div>
+        </div>
+      ) : isFinalized ? (
+        <div className="mb-6 p-4 bg-orange-500/10 border border-orange-500/30 rounded-xl text-center">
+          <p className="text-orange-400 font-medium">
+            {isWinner && !hasClaimed 
+              ? '🏆 You WON! Claim your tokens below'
+              : !isWinner && userDepositSol > 0 && !hasClaimed
+              ? '💸 Claim your refund below'
+              : 'Presale ended - Next launch coming soon!'}
+          </p>
+        </div>
+      ) : (
+        <div className="mb-6 p-4 bg-gray-800/50 rounded-xl text-center">
+          <p className="text-gray-400">Next presale coming soon...</p>
         </div>
       )}
 
@@ -255,84 +252,78 @@ export const PresalePanel: FC<PresalePanelProps> = ({ roundId = 1 }) => {
         </div>
       )}
 
-      {/* Pool stats */}
+      {/* Pool stats - Simple */}
       <div className="grid grid-cols-2 gap-4 mb-6">
-        <div className="p-4 bg-gray-800/50 rounded-lg text-center">
-          <div className="text-2xl font-bold text-white">
-            {totalDepositedSol.toFixed(2)} SOL
+        <div className="p-4 bg-gray-800/50 rounded-xl text-center">
+          <div className="text-3xl font-bold text-white">
+            {totalDepositedSol.toFixed(1)}
           </div>
-          <div className="text-sm text-gray-400">Total Deposits</div>
+          <div className="text-sm text-gray-400">SOL Pooled</div>
         </div>
-        <div className="p-4 bg-gray-800/50 rounded-lg text-center">
-          <div className="text-2xl font-bold text-green-400">
+        <div className="p-4 bg-gray-800/50 rounded-xl text-center">
+          <div className="text-3xl font-bold text-orange-400">
             {lotterySpots}
           </div>
-          <div className="text-sm text-gray-400">Early Access Spots</div>
+          <div className="text-sm text-gray-400">Winners</div>
         </div>
       </div>
 
-      {/* Your deposit */}
+      {/* Your entry */}
       {userDepositSol > 0 && (
-        <div className="mb-4 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
-          <p className="text-orange-400 text-sm">
-            🎰 Your deposit: <span className="font-bold">{userDepositSol.toFixed(4)} SOL</span>
-          </p>
+        <div className="mb-4 p-4 bg-gradient-to-r from-orange-500/10 to-yellow-500/10 border border-orange-500/30 rounded-xl flex items-center justify-between">
+          <span className="text-gray-300">Your entry</span>
+          <span className="text-xl font-bold text-orange-400">{userDepositSol.toFixed(2)} SOL</span>
         </div>
       )}
 
       {/* Deposit input */}
       {connected ? (
-        <>
-          <div className="mb-4">
-            <label className="block text-sm text-gray-400 mb-2">
-              Deposit Amount (SOL)
-            </label>
+        <div className="space-y-4">
+          <div className="relative">
             <input
               type="number"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="0.00"
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-xl font-mono focus:outline-none focus:border-orange-500 transition-colors"
+              className="w-full bg-gray-800 border-2 border-gray-700 rounded-xl px-4 py-4 text-2xl font-mono text-center focus:outline-none focus:border-orange-500 transition-colors"
             />
+            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">SOL</span>
           </div>
 
           <button
             onClick={handleDeposit}
-            disabled={!amount || parseFloat(amount) <= 0 || txLoading || !roundExists || !isActive}
-            className="w-full py-4 rounded-xl font-bold text-lg bg-gradient-to-r from-orange-500 to-yellow-500 hover:from-orange-600 hover:to-yellow-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={!amount || parseFloat(amount) <= 0 || txLoading || !isActive}
+            className="w-full py-4 rounded-xl font-bold text-xl bg-gradient-to-r from-orange-500 to-yellow-500 hover:from-orange-600 hover:to-yellow-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-orange-500/25"
           >
-            {txLoading ? '⏳ Confirming...' : '🎰 DEPOSIT FOR LOTTERY'}
+            {txLoading ? '⏳ Processing...' : '💥 ENTER PRESALE'}
           </button>
           
           {minDepositSol > 0 && (
-            <p className="text-xs text-gray-500 mt-2 text-center">
-              Min: {minDepositSol} SOL | Max: {maxDepositSol} SOL
+            <p className="text-xs text-gray-500 text-center">
+              {minDepositSol} - {maxDepositSol} SOL per entry
             </p>
           )}
-        </>
+        </div>
       ) : (
-        <WalletMultiButton className="!w-full !py-4 !rounded-xl !font-bold !text-lg !bg-gradient-to-r !from-orange-500 !to-red-500 hover:!from-orange-600 hover:!to-red-600 !transition-all !h-auto !justify-center" />
+        <WalletMultiButton className="!w-full !py-4 !rounded-xl !font-bold !text-xl !bg-gradient-to-r !from-orange-500 !to-yellow-500 hover:!from-orange-600 hover:!to-yellow-600 !transition-all !h-auto !justify-center !shadow-lg !shadow-orange-500/25" />
       )}
 
-      {/* How it works */}
-      <div className="mt-6 pt-4 border-t border-gray-800">
-        <h4 className="text-sm font-bold text-gray-400 mb-3">How Presale Works</h4>
-        <div className="space-y-2 text-sm text-gray-500">
-          <div className="flex items-start gap-2">
-            <span>1️⃣</span>
-            <span>Deposit SOL during cooldown period</span>
+      {/* Simple explainer */}
+      <div className="mt-8 pt-6 border-t border-gray-800/50">
+        <div className="flex items-center justify-center gap-8 text-center">
+          <div>
+            <div className="text-2xl mb-1">🎰</div>
+            <div className="text-xs text-gray-500">Enter lottery</div>
           </div>
-          <div className="flex items-start gap-2">
-            <span>2️⃣</span>
-            <span>Lottery picks {lotterySpots} winners for early access</span>
+          <div className="text-gray-600">→</div>
+          <div>
+            <div className="text-2xl mb-1">🏆</div>
+            <div className="text-xs text-gray-500">Winners get tokens</div>
           </div>
-          <div className="flex items-start gap-2">
-            <span>3️⃣</span>
-            <span>Winners get first buy at launch price</span>
-          </div>
-          <div className="flex items-start gap-2">
-            <span>4️⃣</span>
-            <span>Non-winners get refunded automatically</span>
+          <div className="text-gray-600">→</div>
+          <div>
+            <div className="text-2xl mb-1">💥</div>
+            <div className="text-xs text-gray-500">Token goes BOOM</div>
           </div>
         </div>
       </div>

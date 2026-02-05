@@ -11,13 +11,12 @@ import {
   WalletNotInstalled,
   DexScreenerWidget
 } from '@/components';
-// RoundSelector removed per design feedback
 
-// Mock data for demonstration
-const MOCK_TOKEN = {
-  symbol: 'CHAOS',
-  marketCap: 847291,
-  price: 0.00142
+// Current active presale - in production this comes from backend/chain
+const CURRENT_PRESALE = {
+  roundId: 1, // Backend manages this
+  ticker: 'CHAOS',
+  symbol: 'CHAOS'
 };
 
 const MOCK_EXPLOSIONS = [
@@ -32,17 +31,6 @@ export default function Home() {
   useWallet(); // Keep hook for wallet connection
   const [isExploding, setIsExploding] = useState(false);
   const [showWalletNotInstalled, setShowWalletNotInstalled] = useState(false);
-  const [currentRound, setCurrentRound] = useState(11);
-  
-  // Mock: presale status - in reality this comes from on-chain data
-  // For demo, presale is "closed" when viewing a finalized round
-  const [presaleOpen, setPresaleOpen] = useState(true);
-
-  // Update presale status based on round selection
-  useEffect(() => {
-    // Round 10 is our active test round
-    setPresaleOpen(currentRound >= 10);
-  }, [currentRound]);
 
   const handleExplosionClose = () => {
     setIsExploding(false);
@@ -52,19 +40,19 @@ export default function Home() {
     <div className="min-h-screen flex flex-col bg-[#1a2332]">
       <Header 
         isLive={true} 
-        currentTokenSymbol={MOCK_TOKEN.symbol} 
+        currentTokenSymbol={CURRENT_PRESALE.symbol} 
       />
 
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 py-6">
         {/* Top Section: Chart + Buy/Sell */}
         <div className="grid lg:grid-cols-3 gap-6 mb-6">
           <div className="lg:col-span-2">
-            <DexScreenerWidget roundId={currentRound} />
+            <DexScreenerWidget />
           </div>
           <div>
             <BuySellPanel
-              tokenSymbol={MOCK_TOKEN.symbol}
-              currentPrice={MOCK_TOKEN.price}
+              tokenSymbol={CURRENT_PRESALE.symbol}
+              currentPrice={0.00142}
               onBuy={(amount) => console.log('Buy:', amount)}
               onSell={(amount) => console.log('Sell:', amount)}
             />
@@ -74,25 +62,11 @@ export default function Home() {
         {/* Main content: Presale + Sidebar */}
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Left: Presale Panel */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Presale Section */}
-            <div className={`relative ${!presaleOpen ? 'opacity-60' : ''}`}>
-              {/* Closed overlay */}
-              {!presaleOpen && (
-                <div className="absolute inset-0 z-10 bg-gray-900/50 backdrop-blur-sm rounded-xl flex items-center justify-center">
-                  <div className="text-center p-6">
-                    <div className="text-4xl mb-3">⏸️</div>
-                    <h3 className="text-xl font-bold text-white mb-2">Presale Closed</h3>
-                    <p className="text-gray-400 text-sm">
-                      Round #{currentRound} presale has ended. Select an active round or wait for the next one.
-                    </p>
-                  </div>
-                </div>
-              )}
-              
-              <PresalePanel roundId={currentRound} />
-            </div>
-
+          <div className="lg:col-span-2">
+            <PresalePanel 
+              roundId={CURRENT_PRESALE.roundId} 
+              upcomingTicker={CURRENT_PRESALE.ticker}
+            />
           </div>
 
           {/* Right: Sidebar */}

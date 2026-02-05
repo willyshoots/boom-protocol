@@ -4,10 +4,10 @@ import { FC, useState } from 'react';
 import { useCurrentToken } from '../hooks/useCurrentToken';
 
 interface DexScreenerWidgetProps {
-  roundId: number;
+  roundId?: number;
 }
 
-export const DexScreenerWidget: FC<DexScreenerWidgetProps> = ({ roundId }) => {
+export const DexScreenerWidget: FC<DexScreenerWidgetProps> = ({ roundId = 1 }) => {
   const { tokenInfo, dexData } = useCurrentToken(roundId);
   const [isExpanded, setIsExpanded] = useState(true);
 
