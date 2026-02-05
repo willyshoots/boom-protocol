@@ -1294,18 +1294,60 @@ pub mod boom {
 
     /// Unwind LP after explosion - burns LP tokens, extracts SOL
     /// Called by authority after explosion triggers
+    /// Unwind LP after explosion - burns LP tokens, extracts SOL
+    /// Called by authority after explosion triggers
+    /// 
+    /// Flow:
+    /// 1. Burn all tokens in the pool's token vault (LP tokens)
+    /// 2. Record SOL extracted (passed in, extracted off-chain from AMM)
+    /// 3. Calculate remaining supply = mint supply after burn
+    /// 4. Initialize payout pool for holders to claim
     pub fn unwind_lp(
         ctx: Context<UnwindLp>,
         total_sol_extracted: u64,
-        remaining_token_supply: u64,
     ) -> Result<()> {
         let explosion = &mut ctx.accounts.presale_explosion;
+        let pool = &ctx.accounts.pool;
+        let token_vault = &ctx.accounts.token_vault;
+        
         require!(explosion.is_exploded, BoomError::NotExploded);
         require!(explosion.total_sol_for_payout == 0, BoomError::LpAlreadyUnwound);
 
+        // Get tokens in LP vault (these need to be burned)
+        let lp_tokens_to_burn = token_vault.amount;
+        
+        // Burn LP tokens using pool PDA as authority
+        if lp_tokens_to_burn > 0 {
+            let round_id = pool.round_id;
+            let round_id_bytes = round_id.to_le_bytes();
+            let seeds = &[
+                b"pool".as_ref(),
+                round_id_bytes.as_ref(),
+                &[pool.bump],
+            ];
+            let signer_seeds = &[&seeds[..]];
+
+            let burn_accounts = token_2022::Burn {
+                mint: ctx.accounts.mint.to_account_info(),
+                from: ctx.accounts.token_vault.to_account_info(),
+                authority: ctx.accounts.pool.to_account_info(),
+            };
+            let cpi_ctx = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                burn_accounts,
+                signer_seeds,
+            );
+            token_2022::burn(cpi_ctx, lp_tokens_to_burn)?;
+            
+            msg!("Burned {} LP tokens", lp_tokens_to_burn);
+        }
+
+        // Get remaining supply from mint (after burn)
+        // Need to reload mint to get updated supply
+        ctx.accounts.mint.reload()?;
+        let remaining_token_supply = ctx.accounts.mint.supply;
+
         // Record payout pool info
-        // In production, this would CPI to Raydium to actually unwind
-        // For hackathon, authority reports the amounts after off-chain unwind
         explosion.total_sol_for_payout = total_sol_extracted;
 
         // Initialize payout tracking
@@ -1321,6 +1363,9 @@ pub mod boom {
             total_sol: total_sol_extracted,
             remaining_supply: remaining_token_supply,
         });
+
+        msg!("LP unwound: {} SOL for payout, {} tokens remaining in circulation", 
+             total_sol_extracted, remaining_token_supply);
 
         Ok(())
     }
@@ -2218,10 +2263,32 @@ pub struct UnwindLp<'info> {
     )]
     pub payout_pool: Account<'info, PayoutPool>,
 
+    /// The AMM pool (needed to get token vault info and as burn authority)
+    #[account(
+        seeds = [b"pool", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = pool.bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    /// Pool's token vault - tokens here will be burned
+    #[account(
+        mut,
+        address = pool.token_vault
+    )]
+    pub token_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    /// Token mint - to burn LP tokens and get remaining supply
+    #[account(
+        mut,
+        address = pool.mint
+    )]
+    pub mint: InterfaceAccount<'info, MintInterface>,
+
     #[account(mut)]
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token2022>,
 }
 
 #[derive(Accounts)]
