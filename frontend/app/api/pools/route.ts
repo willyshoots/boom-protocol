@@ -114,12 +114,18 @@ export async function GET(request: NextRequest) {
     }
     
     // Check recent rounds (last 20)
-    const startRound = currentRoundId ? currentRoundId.toNumber() : Date.now();
-    const roundsToCheck: number[] = [];
+    // Use BigInt for safe handling of large round IDs
+    let startRound: bigint;
+    try {
+      startRound = currentRoundId ? BigInt(currentRoundId.toString()) : BigInt(Date.now());
+    } catch {
+      startRound = BigInt(Date.now());
+    }
+    const roundsToCheck: bigint[] = [];
     
     // Add current round and work backwards
     for (let i = 0; i < 20; i++) {
-      roundsToCheck.push(startRound - i);
+      roundsToCheck.push(startRound - BigInt(i));
     }
     
     // Also add any rounds we have chart data for
@@ -131,7 +137,7 @@ export async function GET(request: NextRequest) {
     // Fetch pool accounts in parallel
     const poolPromises = roundsToCheck.map(async (roundNum) => {
       try {
-        const roundId = new BN(roundNum);
+        const roundId = new BN(roundNum.toString());
         const [poolPDA] = getPoolPDA(roundId);
         const poolKey = poolPDA.toBase58();
         
@@ -141,8 +147,9 @@ export async function GET(request: NextRequest) {
         const poolData = parsePool(accountInfo.data);
         if (!poolData) return null;
         
-        const solReserve = poolData.solReserve.toNumber() / 1e9;
-        const tokenReserve = poolData.tokenReserve.toNumber();
+        // Safely convert large numbers
+        const solReserve = Number(poolData.solReserve.toString()) / 1e9;
+        const tokenReserve = parseFloat(poolData.tokenReserve.toString());
         const price = tokenReserve > 0 ? solReserve / tokenReserve : null;
         
         const chartInfo = chartData.get(poolKey);
@@ -168,7 +175,11 @@ export async function GET(request: NextRequest) {
     }
     
     // Sort by round ID descending (most recent first)
-    pools.sort((a, b) => parseInt(b.roundId) - parseInt(a.roundId));
+    pools.sort((a, b) => {
+      const aId = BigInt(a.roundId);
+      const bId = BigInt(b.roundId);
+      return bId > aId ? 1 : bId < aId ? -1 : 0;
+    });
     
     return NextResponse.json({
       currentRound: currentRoundId?.toString() || null,

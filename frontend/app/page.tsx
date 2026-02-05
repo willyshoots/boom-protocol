@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Header,
@@ -9,12 +9,13 @@ import {
   PresalePanel,
   ExplosionOverlay,
   WalletNotInstalled,
-  DexScreenerWidget
+  TradingChart,
+  PastLaunches,
 } from '@/components';
 
 // Current active presale - in production this comes from backend/chain
 const CURRENT_PRESALE = {
-  roundId: 1, // Backend manages this
+  roundId: 1770266776769, // Round from atomic swap tests
   ticker: 'CHAOS',
   symbol: 'CHAOS'
 };
@@ -31,6 +32,7 @@ export default function Home() {
   useWallet(); // Keep hook for wallet connection
   const [isExploding, setIsExploding] = useState(false);
   const [showWalletNotInstalled, setShowWalletNotInstalled] = useState(false);
+  const [selectedRoundId, setSelectedRoundId] = useState<string>(CURRENT_PRESALE.roundId.toString());
 
   const handleExplosionClose = () => {
     setIsExploding(false);
@@ -47,7 +49,10 @@ export default function Home() {
         {/* Top Section: Chart + Buy/Sell */}
         <div className="grid lg:grid-cols-3 gap-6 mb-6">
           <div className="lg:col-span-2">
-            <DexScreenerWidget />
+            <TradingChart 
+              roundId={selectedRoundId}
+              tokenSymbol={CURRENT_PRESALE.symbol}
+            />
           </div>
           <div>
             <BuySellPanel
@@ -69,6 +74,12 @@ export default function Home() {
 
           {/* Right: Sidebar */}
           <div className="space-y-6">
+            {/* Past Launches Archive */}
+            <PastLaunches 
+              onSelectRound={setSelectedRoundId}
+              currentRoundId={selectedRoundId}
+            />
+            
             {/* Recent Explosions */}
             <RecentExplosions explosions={MOCK_EXPLOSIONS} />
           </div>

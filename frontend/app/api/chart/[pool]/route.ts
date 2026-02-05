@@ -171,10 +171,34 @@ export async function GET(
     }
     
     // Calculate current price (in SOL per token)
-    const solReserve = poolData.solReserve.toNumber() / 1e9; // lamports to SOL
-    const tokenReserve = poolData.tokenReserve.toNumber();
+    // Use BN math to avoid precision issues with large numbers
+    const solLamports = poolData.solReserve;
+    const tokenAmount = poolData.tokenReserve;
+    
+    // Convert to safe numbers for price calculation
+    // solReserve is in lamports, tokenReserve is raw token amount
+    const solReserve = Number(solLamports.toString()) / 1e9; // lamports to SOL
+    
+    // For token reserve, we need to handle potentially huge numbers
+    // If it's too large, use string representation
+    let tokenReserve: number;
+    try {
+      tokenReserve = tokenAmount.toNumber();
+    } catch {
+      // Fallback for very large numbers - use approximation
+      const tokenStr = tokenAmount.toString();
+      tokenReserve = parseFloat(tokenStr);
+    }
+    
     const currentPrice = calculatePrice(solReserve, tokenReserve);
-    const totalVolume = poolData.totalVolume.toNumber() / 1e9;
+    
+    // Volume might also be large
+    let totalVolume: number;
+    try {
+      totalVolume = poolData.totalVolume.toNumber() / 1e9;
+    } catch {
+      totalVolume = parseFloat(poolData.totalVolume.toString()) / 1e9;
+    }
     
     // Load and update candles
     let candles = loadCandles(poolKey);
