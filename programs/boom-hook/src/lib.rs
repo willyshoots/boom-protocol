@@ -24,7 +24,22 @@ pub mod boom_hook {
         Ok(())
     }
 
-    /// Initialize the extra account metas list for a mint (required by transfer hook interface)
+    /// Initialize extra account metas with EMPTY list (Phase 1 - allows all transfers)
+    /// Token2022 requires this PDA to exist for hook execution
+    pub fn initialize_extra_account_meta_list_empty(ctx: Context<InitializeExtraAccountMetaListEmpty>) -> Result<()> {
+        // Empty list - no extra accounts required
+        let extra_account_metas: Vec<ExtraAccountMeta> = vec![];
+        
+        let extra_metas_account = &ctx.accounts.extra_account_metas;
+        let mut data = extra_metas_account.try_borrow_mut_data()?;
+        ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &extra_account_metas)?;
+
+        msg!("Extra account metas initialized EMPTY for mint: {}", ctx.accounts.mint.key());
+        msg!("Phase 1 mode: all transfers allowed");
+        Ok(())
+    }
+
+    /// Initialize the extra account metas list for a mint (Phase 2 - lockdown)
     /// This tells Token2022 which extra accounts to pass to execute()
     pub fn initialize_extra_account_meta_list(ctx: Context<InitializeExtraAccountMetaList>) -> Result<()> {
         // The extra accounts our execute() function needs:
@@ -50,7 +65,7 @@ pub mod boom_hook {
         ];
 
         // Calculate required space
-        let account_size = ExtraAccountMetaList::size_of(extra_account_metas.len())?;
+        let _account_size = ExtraAccountMetaList::size_of(extra_account_metas.len())?;
         
         // Initialize the account
         let extra_metas_account = &ctx.accounts.extra_account_metas;
@@ -58,6 +73,39 @@ pub mod boom_hook {
         ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &extra_account_metas)?;
 
         msg!("Extra account metas initialized for mint: {}", ctx.accounts.mint.key());
+        msg!("Phase 2 mode: lockdown enabled");
+        Ok(())
+    }
+
+    /// Upgrade extra account metas from Phase 1 (empty) to Phase 2 (with config+whitelist)
+    /// This rewrites the data in place - account was pre-allocated with enough space
+    pub fn upgrade_extra_account_meta_list(ctx: Context<UpgradeExtraAccountMetaList>) -> Result<()> {
+        let extra_account_metas = vec![
+            ExtraAccountMeta::new_with_seeds(
+                &[Seed::Literal { bytes: b"hook_config".to_vec() }],
+                false,
+                false,
+            )?,
+            ExtraAccountMeta::new_with_seeds(
+                &[
+                    Seed::Literal { bytes: b"whitelist".to_vec() },
+                    Seed::AccountKey { index: 1 },
+                ],
+                false,
+                false,
+            )?,
+        ];
+        
+        let extra_metas_account = &ctx.accounts.extra_account_metas;
+        let mut data = extra_metas_account.try_borrow_mut_data()?;
+        
+        // Clear the existing data first (zero out the discriminator)
+        data[0..8].copy_from_slice(&[0u8; 8]);
+        
+        // Now init fresh
+        ExtraAccountMetaList::init::<ExecuteInstruction>(&mut data, &extra_account_metas)?;
+
+        msg!("Extra account metas UPGRADED to Phase 2 for mint: {}", ctx.accounts.mint.key());
         Ok(())
     }
 
@@ -135,9 +183,11 @@ fn execute_transfer_hook<'info>(
     // 4: extra_account_metas
     // 5+: our extra accounts (config, whitelist)
     
+    // PHASE 1 MODE: If extra_account_metas not initialized, allow all transfers
+    // This enables LP creation before lockdown
     if accounts.len() < 7 {
-        msg!("Not enough accounts provided to transfer hook");
-        return Err(ProgramError::NotEnoughAccountKeys.into());
+        msg!("Phase 1 mode: extra accounts not initialized, allowing transfer");
+        return Ok(());
     }
     
     let destination_token_info = &accounts[2];
@@ -179,6 +229,20 @@ fn execute_transfer_hook<'info>(
         msg!("Trading not enabled yet - no whitelist");
         return Err(HookError::TradingNotEnabled.into());
     };
+    
+    // Get authority from config for bypass check
+    let authority = Pubkey::try_from(&config_data[8..40]).map_err(|_| ProgramError::InvalidAccountData)?;
+    
+    // Get source token owner to check if it's the authority
+    let source_token_info = &accounts[0];
+    let source_data = source_token_info.try_borrow_data()?;
+    let source_owner = Pubkey::try_from(&source_data[32..64]).map_err(|_| ProgramError::InvalidAccountData)?;
+    
+    // AUTHORITY BYPASS: Allow authority to transfer during setup (for LP creation)
+    if source_owner == authority {
+        msg!("Authority transfer allowed for LP setup - source: {}", source_owner);
+        return Ok(());
+    }
     
     // OPTION 4: Block ALL transfers until LP is whitelisted
     // If official_lp is not set (default/zero), block everything
@@ -232,11 +296,63 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Accounts for initializing extra account metas (required by transfer hook interface)
+/// Accounts for initializing extra account metas EMPTY (Phase 1 - allows all)
+/// Pre-allocates space for Phase 2 upgrade
+#[derive(Accounts)]
+pub struct InitializeExtraAccountMetaListEmpty<'info> {
+    /// The extra account metas PDA - EMPTY but with space for 2
+    /// CHECK: Initialized by this instruction
+    #[account(
+        init,
+        payer = payer,
+        space = ExtraAccountMetaList::size_of(2).unwrap(), // Pre-allocate for Phase 2
+        seeds = [b"extra-account-metas", mint.key().as_ref()],
+        bump
+    )]
+    pub extra_account_metas: UncheckedAccount<'info>,
+    
+    /// The token mint
+    pub mint: InterfaceAccount<'info, Mint>,
+    
+    /// The payer for rent
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    
+    pub system_program: Program<'info, System>,
+}
+
+/// Accounts for upgrading extra account metas from Phase 1 to Phase 2
+#[derive(Accounts)]
+pub struct UpgradeExtraAccountMetaList<'info> {
+    /// Hook config for authority check
+    #[account(
+        seeds = [b"hook_config"],
+        bump = config.bump,
+        has_one = authority
+    )]
+    pub config: Account<'info, HookConfig>,
+
+    /// The extra account metas PDA to upgrade
+    /// CHECK: Already initialized, will be rewritten
+    #[account(
+        mut,
+        seeds = [b"extra-account-metas", mint.key().as_ref()],
+        bump
+    )]
+    pub extra_account_metas: UncheckedAccount<'info>,
+    
+    /// The token mint
+    pub mint: InterfaceAccount<'info, Mint>,
+    
+    /// Authority (must match config)
+    pub authority: Signer<'info>,
+}
+
+/// Accounts for initializing extra account metas with blocking (fresh init for Phase 2)
 #[derive(Accounts)]
 pub struct InitializeExtraAccountMetaList<'info> {
     /// The extra account metas PDA
-    /// CHECK: Initialized by this instruction
+    /// CHECK: Fresh init
     #[account(
         init,
         payer = payer,

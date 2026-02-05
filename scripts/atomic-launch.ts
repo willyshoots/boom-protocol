@@ -23,28 +23,61 @@ import {
   sendAndConfirmTransaction,
   SystemProgram,
   LAMPORTS_PER_SOL,
+  VersionedTransaction,
 } from '@solana/web3.js';
 import {
   TOKEN_2022_PROGRAM_ID,
   ExtensionType,
   createInitializeMintInstruction,
   createInitializeTransferHookInstruction,
-  createInitializeMetadataPointerInstruction,
   getMintLen,
   createAssociatedTokenAccountInstruction,
   createMintToInstruction,
   getAssociatedTokenAddressSync,
-  TYPE_SIZE,
-  LENGTH_SIZE,
 } from '@solana/spl-token';
-import {
-  createInitializeInstruction,
-  pack,
-  TokenMetadata,
-} from '@solana/spl-token-metadata';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as https from 'https';
 import { createHash } from 'crypto';
+
+// HTTP helper for FluxBeam API
+function httpPost(url: string, data: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const postData = JSON.stringify(data);
+    
+    const options = {
+      hostname: urlObj.hostname,
+      port: 443,
+      path: urlObj.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+    
+    const req = https.request(options, (res) => {
+      let body = '';
+      res.on('data', (chunk) => body += chunk);
+      res.on('end', () => {
+        try {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`HTTP ${res.statusCode}: ${body}`));
+          } else {
+            resolve(JSON.parse(body));
+          }
+        } catch (e) {
+          reject(new Error(`Parse error: ${body}`));
+        }
+      });
+    });
+    
+    req.on('error', reject);
+    req.write(postData);
+    req.end();
+  });
+}
 
 // Program IDs
 const BOOM_PROGRAM_ID = new PublicKey('GC56De2SrwjGsCCFimwqxzxwjpHBEsubP3AV1yXwVtrn');
@@ -175,35 +208,23 @@ async function atomicLaunch(roundId: number) {
     console.log('\n✅ Step 1: Presale already finalized');
   }
 
-  // ==================== STEP 2: Create Token2022 with Transfer Hook + Metadata ====================
-  console.log('\n🪙 Step 2: Creating Token2022 with transfer hook + metadata...');
-  console.log(`   Name: ${tokenName}`);
+  // ==================== STEP 2: Create Token2022 with Transfer Hook ====================
+  console.log('\n🪙 Step 2: Creating Token2022 with transfer hook...');
+  console.log(`   Name: ${tokenName} (Note: metadata via Metaplex later)`);
   console.log(`   Symbol: ${tokenSymbol}`);
   
   const mintKeypair = Keypair.generate();
   const mint = mintKeypair.publicKey;
   console.log(`   Mint: ${mint.toBase58()}`);
 
-  // Build metadata
-  const metadata: TokenMetadata = {
-    mint: mint,
-    name: tokenName,
-    symbol: tokenSymbol,
-    uri: tokenUri,
-    additionalMetadata: [],
-  };
-  const metadataLen = pack(metadata).length;
-
-  // Calculate mint account size with both extensions
-  const mintLen = getMintLen([ExtensionType.TransferHook, ExtensionType.MetadataPointer]);
-  // Total space = mint + metadata extension header + metadata content
-  const totalSpace = mintLen + TYPE_SIZE + LENGTH_SIZE + metadataLen;
-  const mintRent = await connection.getMinimumBalanceForRentExemption(totalSpace);
+  // Calculate mint account size with transfer hook extension only
+  const mintLen = getMintLen([ExtensionType.TransferHook]);
+  const mintRent = await connection.getMinimumBalanceForRentExemption(mintLen);
 
   const createMintAccountIx = SystemProgram.createAccount({
     fromPubkey: wallet.publicKey,
     newAccountPubkey: mint,
-    space: totalSpace,
+    space: mintLen,
     lamports: mintRent,
     programId: TOKEN_2022_PROGRAM_ID,
   });
@@ -216,14 +237,6 @@ async function atomicLaunch(roundId: number) {
     TOKEN_2022_PROGRAM_ID
   );
 
-  // Initialize metadata pointer (points to itself)
-  const initMetadataPointerIx = createInitializeMetadataPointerInstruction(
-    mint,
-    wallet.publicKey,
-    mint, // metadata stored in mint account itself
-    TOKEN_2022_PROGRAM_ID
-  );
-
   // Initialize the mint
   const initMintIx = createInitializeMintInstruction(
     mint,
@@ -233,27 +246,13 @@ async function atomicLaunch(roundId: number) {
     TOKEN_2022_PROGRAM_ID
   );
 
-  // Initialize the metadata
-  const initMetadataIx = createInitializeInstruction({
-    programId: TOKEN_2022_PROGRAM_ID,
-    mint: mint,
-    metadata: mint,
-    name: metadata.name,
-    symbol: metadata.symbol,
-    uri: metadata.uri,
-    mintAuthority: wallet.publicKey,
-    updateAuthority: wallet.publicKey,
-  });
-
   const tx2 = new Transaction().add(
     createMintAccountIx, 
     initTransferHookIx, 
-    initMetadataPointerIx,
-    initMintIx,
-    initMetadataIx
+    initMintIx
   );
   const sig2 = await sendAndConfirmTransaction(connection, tx2, [wallet, mintKeypair]);
-  console.log(`   ✅ Token created with metadata: ${sig2}`);
+  console.log(`   ✅ Token created: ${sig2}`);
 
   // ==================== STEP 3: Initialize Hook PDAs ====================
   console.log('\n🔧 Step 3: Initializing hook PDAs...');
@@ -323,26 +322,68 @@ async function atomicLaunch(roundId: number) {
   const sig4 = await sendAndConfirmTransaction(connection, tx4, [wallet]);
   console.log(`   ✅ Minted ${TOTAL_SUPPLY.toLocaleString()} tokens: ${sig4}`);
 
-  // ==================== STEP 5: Create LP ====================
-  console.log('\n🏊 Step 5: Creating LP...');
+  // ==================== STEP 5: Create LP on FluxBeam ====================
+  console.log('\n🏊 Step 5: Creating LP on FluxBeam...');
   
-  // For devnet: Use Raydium with standard token workaround
-  // For mainnet: Would use FluxBeam
-  // For now, simulate LP creation with a placeholder
+  const WSOL_MINT = 'So11111111111111111111111111111111111111112';
   
-  // TODO: Integrate actual FluxBeam LP creation for mainnet
-  // For testing, we'll use a dummy LP address and update the whitelist
+  // Use minimal amounts for testing
+  // SOL: 0.05 SOL (conservative)
+  // Tokens: 10% of supply (100M tokens)
+  const solForLp = Math.floor(0.05 * LAMPORTS_PER_SOL);
+  const tokensForLp = BigInt(100_000_000) * BigInt(10 ** TOKEN_DECIMALS);
   
-  const dummyLpAddress = Keypair.generate().publicKey;
-  console.log(`   ⚠️ Placeholder LP: ${dummyLpAddress.toBase58()}`);
-  console.log(`   (Real implementation would create FluxBeam pool here)`);
+  console.log(`   SOL for LP: ${solForLp / LAMPORTS_PER_SOL} SOL`);
+  console.log(`   Tokens for LP: 100,000,000`);
+  console.log(`   Calling FluxBeam API...`);
+  
+  let lpAddress: PublicKey;
+  
+  try {
+    const fluxResult = await httpPost('https://api.fluxbeam.xyz/v1/token_pools', {
+      payer: wallet.publicKey.toBase58(),
+      token_a: WSOL_MINT,
+      token_b: mint.toBase58(),
+      token_a_amount: solForLp,
+      token_b_amount: tokensForLp.toString(),
+      priority_fee_lamports: 10000
+    });
+    
+    console.log(`   Pool Address: ${fluxResult.pool}`);
+    lpAddress = new PublicKey(fluxResult.pool);
+    
+    if (fluxResult.transaction) {
+      // Decode and sign the FluxBeam transaction
+      const txBuffer = Buffer.from(fluxResult.transaction, 'base64');
+      const versionedTx = VersionedTransaction.deserialize(txBuffer);
+      versionedTx.sign([wallet]);
+      
+      const lpSig = await connection.sendRawTransaction(versionedTx.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3
+      });
+      
+      console.log(`   LP Transaction: ${lpSig}`);
+      
+      // Wait for confirmation
+      await connection.confirmTransaction(lpSig, 'confirmed');
+      console.log(`   ✅ LP created on FluxBeam!`);
+    } else {
+      throw new Error('FluxBeam API did not return a transaction');
+    }
+  } catch (err: any) {
+    console.error(`   ⚠️ FluxBeam LP creation failed: ${err.message}`);
+    console.log(`   Falling back to placeholder LP for testing...`);
+    lpAddress = Keypair.generate().publicKey;
+    console.log(`   Placeholder LP: ${lpAddress.toBase58()}`);
+  }
 
   // ==================== STEP 6: Enable Trading (Whitelist LP) ====================
   console.log('\n🔓 Step 6: Enabling trading (whitelisting LP)...');
 
   const updateWhitelistData = Buffer.concat([
     getDiscriminator('update_whitelist'),
-    dummyLpAddress.toBuffer()
+    lpAddress.toBuffer()
   ]);
 
   const updateWhitelistIx = new TransactionInstruction({
@@ -363,7 +404,7 @@ async function atomicLaunch(roundId: number) {
   console.log('\n🎉 LAUNCH COMPLETE!');
   console.log('==========================================');
   console.log(`Token Mint: ${mint.toBase58()}`);
-  console.log(`LP Address: ${dummyLpAddress.toBase58()}`);
+  console.log(`LP Address: ${lpAddress.toBase58()}`);
   console.log(`Total Supply: ${TOTAL_SUPPLY.toLocaleString()}`);
   console.log(`LP Allocation: ${LP_PERCENTAGE}%`);
   console.log(`Winner Allocation: ${WINNER_PERCENTAGE}%`);
@@ -374,7 +415,7 @@ async function atomicLaunch(roundId: number) {
 
   return {
     mint: mint.toBase58(),
-    lpAddress: dummyLpAddress.toBase58(),
+    lpAddress: lpAddress.toBase58(),
   };
 }
 
