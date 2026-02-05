@@ -446,6 +446,52 @@ export function getRoundSequencerPDA(): [PublicKey, number] {
   );
 }
 
+// AMM Pool PDAs
+export function getPoolPDA(roundId: BN): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('pool'), roundId.toArrayLike(Buffer, 'le', 8)],
+    PROGRAM_ID
+  );
+}
+
+export function getTokenVaultPDA(roundId: BN): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('token_vault'), roundId.toArrayLike(Buffer, 'le', 8)],
+    PROGRAM_ID
+  );
+}
+
+export function getSolVaultPDA(roundId: BN): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('sol_vault'), roundId.toArrayLike(Buffer, 'le', 8)],
+    PROGRAM_ID
+  );
+}
+
+// Hook Program PDAs
+export const HOOK_PROGRAM_ID = new PublicKey('CzgS4YQmsGxatMVJiKehgGgf12tbtQEM7s4AAyNzWWK9');
+
+export function getExtraAccountMetasPDA(mint: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('extra-account-metas'), mint.toBuffer()],
+    HOOK_PROGRAM_ID
+  );
+}
+
+export function getHookConfigPDA(): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('hook_config')],
+    HOOK_PROGRAM_ID
+  );
+}
+
+export function getHookWhitelistPDA(mint: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('whitelist'), mint.toBuffer()],
+    HOOK_PROGRAM_ID
+  );
+}
+
 // Explosion-related interfaces
 export interface PresaleExplosion {
   roundId: BN;

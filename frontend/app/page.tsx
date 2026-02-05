@@ -52,9 +52,7 @@ export default function Home() {
           <div>
             <BuySellPanel
               tokenSymbol={CURRENT_PRESALE.symbol}
-              currentPrice={0.00142}
-              onBuy={(amount) => console.log('Buy:', amount)}
-              onSell={(amount) => console.log('Sell:', amount)}
+              roundId={CURRENT_PRESALE.roundId}
             />
           </div>
         </div>
@@ -92,7 +90,7 @@ export default function Home() {
       {/* Explosion overlay */}
       <ExplosionOverlay
         isExploding={isExploding}
-        tokenSymbol={MOCK_TOKEN.symbol}
+        tokenSymbol={CURRENT_PRESALE.symbol}
         payout={1847 * 1.2}
         multiplier={1.2}
         onClose={handleExplosionClose}

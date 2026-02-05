@@ -25,7 +25,7 @@ export const Header: FC<HeaderProps> = ({ isLive, currentTokenSymbol }) => {
         <div className="flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-4">
-            <BoomLogo size="sm" animated={isLive} />
+            <BoomLogo size="sm" />
             <div>
               <h1 className="text-xl font-bold bg-gradient-to-r from-[#d4c4a8] to-[#e07020] bg-clip-text text-transparent">
                 BOOM Protocol
