@@ -464,6 +464,329 @@ pub mod boom {
         Ok(())
     }
 
+    // ==================== CUSTOM AMM (DEX) ====================
+
+    /// Create a pool for trading after presale
+    /// Takes all SOL from presale and creates a constant product AMM pool
+    pub fn create_pool(
+        ctx: Context<CreatePool>,
+        round_id: u64,
+        fee_bps: u16,
+    ) -> Result<()> {
+        let presale = &ctx.accounts.presale_round;
+        let presale_token = &ctx.accounts.presale_token;
+        
+        require!(presale.is_finalized, BoomError::PresaleNotFinalized);
+        require!(fee_bps <= 1000, BoomError::FeeTooHigh); // Max 10%
+
+        // Get SOL from presale (winners' deposits)
+        // Calculate total SOL from winners only
+        let sol_for_pool = presale.total_deposited;
+        require!(sol_for_pool > 0, BoomError::NoSolForPool);
+
+        // Transfer SOL from presale PDA to pool's SOL vault
+        let presale_info = ctx.accounts.presale_round.to_account_info();
+        let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
+        
+        // Keep rent-exempt minimum in presale account
+        let presale_rent = Rent::get()?.minimum_balance(presale_info.data_len());
+        let transferable_sol = presale_info
+            .lamports()
+            .checked_sub(presale_rent)
+            .ok_or(BoomError::Overflow)?;
+        
+        // Transfer SOL to pool vault
+        **presale_info.try_borrow_mut_lamports()? -= transferable_sol;
+        **sol_vault_info.try_borrow_mut_lamports()? += transferable_sol;
+
+        // Get token balance in token vault
+        let token_vault = &ctx.accounts.token_vault;
+        let token_reserve = token_vault.amount;
+        require!(token_reserve > 0, BoomError::NoTokensForPool);
+
+        // Initialize pool state
+        let pool = &mut ctx.accounts.pool;
+        pool.round_id = round_id;
+        pool.mint = ctx.accounts.mint.key();
+        pool.token_vault = ctx.accounts.token_vault.key();
+        pool.sol_vault = ctx.accounts.sol_vault.key();
+        pool.sol_reserve = transferable_sol;
+        pool.token_reserve = token_reserve;
+        pool.fee_bps = fee_bps;
+        pool.total_volume = 0;
+        pool.total_fees = 0;
+        pool.bump = ctx.bumps.pool;
+        pool.token_vault_bump = ctx.bumps.token_vault;
+        pool.sol_vault_bump = ctx.bumps.sol_vault;
+
+        emit!(PoolCreated {
+            round_id,
+            mint: pool.mint,
+            sol_reserve: pool.sol_reserve,
+            token_reserve: pool.token_reserve,
+            fee_bps,
+        });
+
+        Ok(())
+    }
+
+    /// Swap tokens in the AMM pool
+    /// - is_buy: true = user sends SOL, receives tokens
+    /// - is_buy: false = user sends tokens, receives SOL
+    pub fn swap(
+        ctx: Context<Swap>,
+        amount_in: u64,
+        min_amount_out: u64,
+        is_buy: bool,
+    ) -> Result<()> {
+        require!(amount_in > 0, BoomError::ZeroAmount);
+        
+        // Get account infos BEFORE any mutable borrows
+        let pool_account_info = ctx.accounts.pool.to_account_info();
+        let token_vault_info = ctx.accounts.token_vault.to_account_info();
+        let mint_info = ctx.accounts.mint.to_account_info();
+        let user_token_account_info = ctx.accounts.user_token_account.to_account_info();
+        let user_info = ctx.accounts.user.to_account_info();
+        let sol_vault_info = ctx.accounts.sol_vault.to_account_info();
+        let system_program_info = ctx.accounts.system_program.to_account_info();
+        let token_program_info = ctx.accounts.token_program.to_account_info();
+        
+        // Now get mutable reference to pool
+        let pool = &mut ctx.accounts.pool;
+        
+        // Constant product formula with fee:
+        // output = (reserve_out * amount_in * (10000 - fee_bps)) / (reserve_in * 10000 + amount_in * (10000 - fee_bps))
+        
+        let fee_factor = 10000u128 - pool.fee_bps as u128;
+        let amount_in_128 = amount_in as u128;
+        
+        let amount_out = if is_buy {
+            // Buy: SOL -> Token
+            let reserve_in = pool.sol_reserve as u128;
+            let reserve_out = pool.token_reserve as u128;
+            
+            let numerator = reserve_out
+                .checked_mul(amount_in_128)
+                .ok_or(BoomError::Overflow)?
+                .checked_mul(fee_factor)
+                .ok_or(BoomError::Overflow)?;
+            
+            let denominator = reserve_in
+                .checked_mul(10000)
+                .ok_or(BoomError::Overflow)?
+                .checked_add(amount_in_128.checked_mul(fee_factor).ok_or(BoomError::Overflow)?)
+                .ok_or(BoomError::Overflow)?;
+            
+            numerator.checked_div(denominator).ok_or(BoomError::Overflow)? as u64
+        } else {
+            // Sell: Token -> SOL
+            let reserve_in = pool.token_reserve as u128;
+            let reserve_out = pool.sol_reserve as u128;
+            
+            let numerator = reserve_out
+                .checked_mul(amount_in_128)
+                .ok_or(BoomError::Overflow)?
+                .checked_mul(fee_factor)
+                .ok_or(BoomError::Overflow)?;
+            
+            let denominator = reserve_in
+                .checked_mul(10000)
+                .ok_or(BoomError::Overflow)?
+                .checked_add(amount_in_128.checked_mul(fee_factor).ok_or(BoomError::Overflow)?)
+                .ok_or(BoomError::Overflow)?;
+            
+            numerator.checked_div(denominator).ok_or(BoomError::Overflow)? as u64
+        };
+
+        require!(amount_out >= min_amount_out, BoomError::SlippageExceeded);
+        require!(amount_out > 0, BoomError::ZeroOutput);
+
+        // Calculate fee
+        let fee_amount = (amount_in as u128)
+            .checked_mul(pool.fee_bps as u128)
+            .ok_or(BoomError::Overflow)?
+            .checked_div(10000)
+            .ok_or(BoomError::Overflow)? as u64;
+
+        // Store values we need
+        let round_id = pool.round_id;
+        let pool_bump = pool.bump;
+
+        if is_buy {
+            // User sends SOL, receives tokens
+            
+            // 1. Transfer SOL from user to sol_vault
+            let cpi_ctx = CpiContext::new(
+                system_program_info.clone(),
+                anchor_lang::system_program::Transfer {
+                    from: user_info.clone(),
+                    to: sol_vault_info.clone(),
+                },
+            );
+            anchor_lang::system_program::transfer(cpi_ctx, amount_in)?;
+
+            // 2. Transfer tokens from token_vault to user's token account
+            // Need to use pool PDA as signer
+            let round_id_bytes = round_id.to_le_bytes();
+            let seeds = &[
+                b"pool".as_ref(),
+                round_id_bytes.as_ref(),
+                &[pool_bump],
+            ];
+            let signer_seeds = &[&seeds[..]];
+
+            let transfer_accounts = token_2022::TransferChecked {
+                from: token_vault_info,
+                mint: mint_info,
+                to: user_token_account_info,
+                authority: pool_account_info,
+            };
+            let cpi_ctx = CpiContext::new_with_signer(
+                token_program_info,
+                transfer_accounts,
+                signer_seeds,
+            );
+            
+            let decimals = 9u8; // Standard for Solana tokens
+            
+            token_2022::transfer_checked(cpi_ctx, amount_out, decimals)?;
+
+            // Update reserves
+            pool.sol_reserve = pool.sol_reserve.checked_add(amount_in).ok_or(BoomError::Overflow)?;
+            pool.token_reserve = pool.token_reserve.checked_sub(amount_out).ok_or(BoomError::Overflow)?;
+        } else {
+            // User sends tokens, receives SOL
+            
+            // 1. Transfer tokens from user to token_vault
+            let transfer_accounts = token_2022::TransferChecked {
+                from: user_token_account_info,
+                mint: mint_info,
+                to: token_vault_info,
+                authority: user_info.clone(),
+            };
+            let cpi_ctx = CpiContext::new(
+                token_program_info,
+                transfer_accounts,
+            );
+            
+            let decimals = 9u8;
+            token_2022::transfer_checked(cpi_ctx, amount_in, decimals)?;
+
+            // 2. Transfer SOL from sol_vault to user (direct lamport manipulation for PDA)
+            **sol_vault_info.try_borrow_mut_lamports()? -= amount_out;
+            **user_info.try_borrow_mut_lamports()? += amount_out;
+
+            // Update reserves
+            pool.token_reserve = pool.token_reserve.checked_add(amount_in).ok_or(BoomError::Overflow)?;
+            pool.sol_reserve = pool.sol_reserve.checked_sub(amount_out).ok_or(BoomError::Overflow)?;
+        }
+
+        // Update stats
+        pool.total_volume = pool.total_volume.checked_add(amount_in as u128).ok_or(BoomError::Overflow)?;
+        pool.total_fees = pool.total_fees.checked_add(fee_amount as u128).ok_or(BoomError::Overflow)?;
+
+        emit!(SwapExecuted {
+            round_id: pool.round_id,
+            user: ctx.accounts.user.key(),
+            is_buy,
+            amount_in,
+            amount_out,
+            fee_amount,
+            new_sol_reserve: pool.sol_reserve,
+            new_token_reserve: pool.token_reserve,
+        });
+
+        Ok(())
+    }
+
+    /// Get a quote for a swap (view function - no state changes)
+    /// Returns the expected output amount and price impact
+    pub fn get_swap_quote(
+        ctx: Context<GetSwapQuote>,
+        amount_in: u64,
+        is_buy: bool,
+    ) -> Result<()> {
+        let pool = &ctx.accounts.pool;
+        
+        let fee_factor = 10000u128 - pool.fee_bps as u128;
+        let amount_in_128 = amount_in as u128;
+        
+        let (reserve_in, reserve_out) = if is_buy {
+            (pool.sol_reserve as u128, pool.token_reserve as u128)
+        } else {
+            (pool.token_reserve as u128, pool.sol_reserve as u128)
+        };
+        
+        let numerator = reserve_out
+            .checked_mul(amount_in_128)
+            .ok_or(BoomError::Overflow)?
+            .checked_mul(fee_factor)
+            .ok_or(BoomError::Overflow)?;
+        
+        let denominator = reserve_in
+            .checked_mul(10000)
+            .ok_or(BoomError::Overflow)?
+            .checked_add(amount_in_128.checked_mul(fee_factor).ok_or(BoomError::Overflow)?)
+            .ok_or(BoomError::Overflow)?;
+        
+        let amount_out = numerator.checked_div(denominator).ok_or(BoomError::Overflow)? as u64;
+        
+        // Calculate price impact (basis points)
+        // price_impact = 1 - (amount_out / (amount_in * price))
+        // where price = reserve_out / reserve_in
+        let ideal_out = amount_in_128
+            .checked_mul(reserve_out)
+            .ok_or(BoomError::Overflow)?
+            .checked_div(reserve_in)
+            .ok_or(BoomError::Overflow)?;
+        
+        let price_impact_bps = if ideal_out > 0 {
+            ((ideal_out - amount_out as u128) * 10000 / ideal_out) as u16
+        } else {
+            0
+        };
+
+        emit!(SwapQuote {
+            round_id: pool.round_id,
+            is_buy,
+            amount_in,
+            amount_out,
+            price_impact_bps,
+            fee_bps: pool.fee_bps,
+        });
+
+        Ok(())
+    }
+
+    /// Deposit tokens to pool's token vault (for initial liquidity)
+    /// Called before create_pool to fund the token side
+    pub fn deposit_pool_tokens(
+        ctx: Context<DepositPoolTokens>,
+        amount: u64,
+    ) -> Result<()> {
+        // Transfer tokens from authority to token vault
+        let transfer_accounts = token_2022::TransferChecked {
+            from: ctx.accounts.authority_token_account.to_account_info(),
+            mint: ctx.accounts.mint.to_account_info(),
+            to: ctx.accounts.token_vault.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            transfer_accounts,
+        );
+        
+        let decimals = 9u8;
+        token_2022::transfer_checked(cpi_ctx, amount, decimals)?;
+
+        emit!(PoolTokensDeposited {
+            round_id: ctx.accounts.presale_round.round_id,
+            amount,
+        });
+
+        Ok(())
+    }
+
     // ==================== PRESALE EXPLOSION ====================
 
     /// Initialize explosion tracking for a presale token
@@ -1141,6 +1464,166 @@ pub struct RegisterLp<'info> {
     pub system_program: Program<'info, System>,
 }
 
+// ==================== CUSTOM AMM CONTEXTS ====================
+
+#[derive(Accounts)]
+#[instruction(round_id: u64)]
+pub struct CreatePool<'info> {
+    #[account(
+        mut,
+        seeds = [b"presale", round_id.to_le_bytes().as_ref()],
+        bump = presale_round.bump,
+        has_one = authority
+    )]
+    pub presale_round: Box<Account<'info, PresaleRound>>,
+
+    #[account(
+        seeds = [b"presale_token", round_id.to_le_bytes().as_ref()],
+        bump = presale_token.bump,
+        constraint = presale_token.mint == mint.key() @ BoomError::InvalidMint
+    )]
+    pub presale_token: Box<Account<'info, PresaleToken>>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + Pool::INIT_SPACE,
+        seeds = [b"pool", round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub pool: Box<Account<'info, Pool>>,
+
+    /// The token mint
+    pub mint: Box<InterfaceAccount<'info, MintInterface>>,
+
+    /// Token vault PDA - holds tokens for the pool
+    #[account(
+        init,
+        payer = authority,
+        token::mint = mint,
+        token::authority = pool,
+        token::token_program = token_program,
+        seeds = [b"token_vault", round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub token_vault: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// SOL vault PDA - holds SOL for the pool
+    /// CHECK: PDA that holds SOL
+    #[account(
+        mut,
+        seeds = [b"sol_vault", round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Swap<'info> {
+    #[account(
+        mut,
+        seeds = [b"pool", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    /// The token mint
+    #[account(
+        constraint = mint.key() == pool.mint @ BoomError::InvalidMint
+    )]
+    pub mint: InterfaceAccount<'info, MintInterface>,
+
+    /// Pool's token vault
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = pool,
+        constraint = token_vault.key() == pool.token_vault @ BoomError::InvalidVault
+    )]
+    pub token_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    /// Pool's SOL vault
+    /// CHECK: PDA holding SOL
+    #[account(
+        mut,
+        seeds = [b"sol_vault", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.sol_vault_bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+
+    /// User's token account
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = user
+    )]
+    pub user_token_account: InterfaceAccount<'info, TokenAccountInterface>,
+
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub token_program: Program<'info, Token2022>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct GetSwapQuote<'info> {
+    #[account(
+        seeds = [b"pool", pool.round_id.to_le_bytes().as_ref()],
+        bump = pool.bump
+    )]
+    pub pool: Account<'info, Pool>,
+}
+
+#[derive(Accounts)]
+#[instruction(amount: u64)]
+pub struct DepositPoolTokens<'info> {
+    #[account(
+        seeds = [b"presale", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = presale_round.bump,
+        has_one = authority
+    )]
+    pub presale_round: Account<'info, PresaleRound>,
+
+    #[account(
+        seeds = [b"presale_token", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = presale_token.bump,
+        constraint = presale_token.mint == mint.key() @ BoomError::InvalidMint
+    )]
+    pub presale_token: Account<'info, PresaleToken>,
+
+    /// The token mint
+    pub mint: InterfaceAccount<'info, MintInterface>,
+
+    /// Token vault PDA
+    #[account(
+        mut,
+        token::mint = mint,
+        seeds = [b"token_vault", presale_round.round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub token_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    /// Authority's token account
+    #[account(
+        mut,
+        token::mint = mint,
+        token::authority = authority
+    )]
+    pub authority_token_account: InterfaceAccount<'info, TokenAccountInterface>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_program: Program<'info, Token2022>,
+}
+
 // ==================== PRESALE EXPLOSION CONTEXTS ====================
 
 #[derive(Accounts)]
@@ -1496,6 +1979,24 @@ pub struct PayoutPool {
     pub bump: u8,                   // 1
 }
 
+/// Custom AMM Pool for trading after presale
+#[account]
+#[derive(InitSpace)]
+pub struct Pool {
+    pub round_id: u64,              // 8 - Links to presale round
+    pub mint: Pubkey,               // 32 - Token mint
+    pub token_vault: Pubkey,        // 32 - PDA holding tokens
+    pub sol_vault: Pubkey,          // 32 - PDA holding SOL
+    pub sol_reserve: u64,           // 8 - Current SOL in pool
+    pub token_reserve: u64,         // 8 - Current tokens in pool
+    pub fee_bps: u16,               // 2 - Fee in basis points (50 = 0.5%)
+    pub total_volume: u128,         // 16 - Total trading volume
+    pub total_fees: u128,           // 16 - Total fees collected
+    pub bump: u8,                   // 1
+    pub token_vault_bump: u8,       // 1
+    pub sol_vault_bump: u8,         // 1
+}
+
 /// Manages automatic round progression
 #[account]
 #[derive(InitSpace)]
@@ -1660,6 +2161,45 @@ pub struct RoundSequencerUpdated {
     pub last_explosion_round: u64,
 }
 
+// ==================== CUSTOM AMM EVENTS ====================
+
+#[event]
+pub struct PoolCreated {
+    pub round_id: u64,
+    pub mint: Pubkey,
+    pub sol_reserve: u64,
+    pub token_reserve: u64,
+    pub fee_bps: u16,
+}
+
+#[event]
+pub struct SwapExecuted {
+    pub round_id: u64,
+    pub user: Pubkey,
+    pub is_buy: bool,
+    pub amount_in: u64,
+    pub amount_out: u64,
+    pub fee_amount: u64,
+    pub new_sol_reserve: u64,
+    pub new_token_reserve: u64,
+}
+
+#[event]
+pub struct SwapQuote {
+    pub round_id: u64,
+    pub is_buy: bool,
+    pub amount_in: u64,
+    pub amount_out: u64,
+    pub price_impact_bps: u16,
+    pub fee_bps: u16,
+}
+
+#[event]
+pub struct PoolTokensDeposited {
+    pub round_id: u64,
+    pub amount: u64,
+}
+
 // ==================== ERRORS ====================
 
 #[error_code]
@@ -1728,4 +2268,19 @@ pub enum BoomError {
     AutoAdvanceDisabled,
     #[msg("Duration must be positive")]
     InvalidDuration,
+    // AMM errors
+    #[msg("Fee too high - max 10%")]
+    FeeTooHigh,
+    #[msg("No SOL available for pool creation")]
+    NoSolForPool,
+    #[msg("No tokens deposited for pool creation")]
+    NoTokensForPool,
+    #[msg("Amount must be greater than zero")]
+    ZeroAmount,
+    #[msg("Output amount too small")]
+    ZeroOutput,
+    #[msg("Slippage tolerance exceeded")]
+    SlippageExceeded,
+    #[msg("Invalid vault account")]
+    InvalidVault,
 }
