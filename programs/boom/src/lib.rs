@@ -283,8 +283,11 @@ pub mod boom {
     pub fn claim_refund(ctx: Context<ClaimRefund>) -> Result<()> {
         let user_deposit = &mut ctx.accounts.user_deposit;
         let presale = &ctx.accounts.presale_round;
+        let explosion = &ctx.accounts.presale_explosion;
 
         require!(presale.is_finalized, BoomError::PresaleNotFinalized);
+        // Trading must have started (explosion timer set) before refunds are available
+        require!(explosion.explosion_deadline > 0, BoomError::TradingNotStarted);
         require!(!user_deposit.is_winner, BoomError::WinnerCannotRefund);
         require!(!user_deposit.claimed, BoomError::AlreadyClaimed);
         require!(user_deposit.amount > 0, BoomError::NothingToRefund);
@@ -309,12 +312,16 @@ pub mod boom {
     }
 
     /// Winners claim their token allocation - mints tokens to winner's account
+    /// Can only claim once trading has started (explosion timer set)
     pub fn claim_winner_tokens(ctx: Context<ClaimWinnerTokens>) -> Result<()> {
         let user_deposit = &mut ctx.accounts.user_deposit;
         let presale = &ctx.accounts.presale_round;
         let presale_token = &ctx.accounts.presale_token;
+        let explosion = &ctx.accounts.presale_explosion;
 
         require!(presale.is_finalized, BoomError::PresaleNotFinalized);
+        // Trading must have started (explosion timer set) before winners can claim
+        require!(explosion.explosion_deadline > 0, BoomError::TradingNotStarted);
         require!(user_deposit.is_winner, BoomError::NotAWinner);
         require!(!user_deposit.claimed, BoomError::AlreadyClaimed);
 
@@ -1677,6 +1684,14 @@ pub struct ClaimRefund<'info> {
         bump = presale_round.bump
     )]
     pub presale_round: Account<'info, PresaleRound>,
+    
+    /// Explosion tracking - needed to verify trading has started
+    #[account(
+        seeds = [b"presale_explosion", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = presale_explosion.bump
+    )]
+    pub presale_explosion: Account<'info, PresaleExplosion>,
+    
     #[account(
         mut,
         seeds = [b"deposit", presale_round.round_id.to_le_bytes().as_ref(), depositor.key().as_ref()],
@@ -1702,6 +1717,13 @@ pub struct ClaimWinnerTokens<'info> {
         constraint = presale_token.mint == mint.key() @ BoomError::InvalidMint
     )]
     pub presale_token: Account<'info, PresaleToken>,
+    
+    /// Explosion tracking - needed to verify trading has started
+    #[account(
+        seeds = [b"presale_explosion", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = presale_explosion.bump
+    )]
+    pub presale_explosion: Account<'info, PresaleExplosion>,
 
     #[account(
         mut,
@@ -2773,6 +2795,8 @@ pub enum BoomError {
     NotAWinner,
     #[msg("Invalid mint for this presale")]
     InvalidMint,
+    #[msg("Trading has not started yet - explosion timer must be set")]
+    TradingNotStarted,
     // Time limit errors
     #[msg("Deadline must be in the future")]
     DeadlineInPast,
