@@ -94,16 +94,19 @@ Nobody knows the number. Not the AI launcher. Not us. Nobody.
 🚧 **Building for Colosseum Agent Hackathon (Feb 2-12, 2026)** 🚧
 
 - [x] Anchor program skeleton
-- [x] Token creation logic
+- [x] Token creation logic  
 - [x] Secret cap mechanism (commit-reveal)
 - [x] Explosion trigger logic
 - [x] Payout claims
 - [x] Presale system (deposit, lottery, refund)
-- [ ] Switchboard VRF integration
-- [ ] LP creation with Raydium
+- [x] VRF integration
+- [x] Custom AMM with Token2022 transfer hooks
+- [x] Anti-sniper atomic launch (~15 sec blocked window)
 - [x] Price monitoring bot
-- [ ] Crash-style frontend
-- [ ] Deploy to devnet
+- [x] Crash-style frontend with DexScreener-style chart
+- [x] Deploy to devnet
+- [ ] Final end-to-end testing
+- [ ] Submit to hackathon
 
 ## Built By
 
