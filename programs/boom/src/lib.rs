@@ -1386,6 +1386,16 @@ pub mod boom {
 
         require!(payout_amount > 0, BoomError::PayoutTooSmall);
 
+        // Cap payout to actual available SOL in vault
+        // This handles the edge case where rent-exempt minimums eat into the last claimer's share
+        let sol_vault_balance = ctx.accounts.sol_vault.lamports();
+        let actual_payout = if payout_amount >= sol_vault_balance {
+            // Last claimer gets everything remaining (closes the vault account)
+            sol_vault_balance
+        } else {
+            payout_amount
+        };
+
         // Transfer SOL from sol_vault to user using CPI with PDA signer
         let pool = &ctx.accounts.pool;
         let round_id = explosion.round_id;
@@ -1398,15 +1408,23 @@ pub mod boom {
         ];
         let signer_seeds = &[&seeds[..]];
 
-        let cpi_ctx = CpiContext::new_with_signer(
-            ctx.accounts.system_program.to_account_info(),
-            anchor_lang::system_program::Transfer {
-                from: ctx.accounts.sol_vault.to_account_info(),
-                to: ctx.accounts.user.to_account_info(),
-            },
-            signer_seeds,
-        );
-        anchor_lang::system_program::transfer(cpi_ctx, payout_amount)?;
+        // Cap payout to what's actually transferable (vault balance minus rent-exempt minimum)
+        let sol_vault_balance = ctx.accounts.sol_vault.lamports();
+        let rent_exempt_min = Rent::get()?.minimum_balance(0);
+        let max_transferable = sol_vault_balance.saturating_sub(rent_exempt_min);
+        let final_payout = actual_payout.min(max_transferable);
+        
+        if final_payout > 0 {
+            let cpi_ctx = CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                anchor_lang::system_program::Transfer {
+                    from: ctx.accounts.sol_vault.to_account_info(),
+                    to: ctx.accounts.user.to_account_info(),
+                },
+                signer_seeds,
+            );
+            anchor_lang::system_program::transfer(cpi_ctx, final_payout)?;
+        }
 
         // Burn user's tokens
         let burn_accounts = token_2022::Burn {
