@@ -5,7 +5,7 @@ use anchor_spl::token::{Mint, Token};
 use anchor_spl::token_2022::{self, Token2022};
 use anchor_spl::token_interface::{Mint as MintInterface, TokenAccount as TokenAccountInterface};
 use anchor_spl::associated_token::AssociatedToken;
-use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
+// use pyth_solana_receiver_sdk::price_update::PriceUpdateV2; // Temporarily removed to reduce binary
 use spl_transfer_hook_interface::onchain::add_extra_accounts_for_execute_cpi;
 
 declare_id!("GC56De2SrwjGsCCFimwqxzxwjpHBEsubP3AV1yXwVtrn");
@@ -295,12 +295,26 @@ pub mod boom {
         let refund_amount = user_deposit.amount;
         user_deposit.claimed = true;
 
-        // Transfer SOL from presale PDA back to user
-        let presale_info = ctx.accounts.presale_round.to_account_info();
-        let depositor_info = ctx.accounts.depositor.to_account_info();
+        // Transfer SOL from sol_vault PDA back to user using CPI with PDA signer
+        let round_id = presale.round_id;
+        let sol_vault_bump = ctx.accounts.pool.sol_vault_bump;
+        let round_id_bytes = round_id.to_le_bytes();
+        let seeds = &[
+            b"sol_vault".as_ref(),
+            round_id_bytes.as_ref(),
+            &[sol_vault_bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
 
-        **presale_info.try_borrow_mut_lamports()? -= refund_amount;
-        **depositor_info.try_borrow_mut_lamports()? += refund_amount;
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.sol_vault.to_account_info(),
+                to: ctx.accounts.depositor.to_account_info(),
+            },
+            signer_seeds,
+        );
+        anchor_lang::system_program::transfer(cpi_ctx, refund_amount)?;
 
         emit!(RefundClaimed {
             round_id: presale.round_id,
@@ -837,6 +851,41 @@ pub mod boom {
         Ok(())
     }
 
+    /// Mint tokens directly to pool's token vault (avoids transfer hook issues)
+    /// Uses the mint_authority PDA to mint tokens for initial pool liquidity
+    pub fn mint_pool_tokens(
+        ctx: Context<MintPoolTokens>,
+        amount: u64,
+    ) -> Result<()> {
+        let round_id = ctx.accounts.presale_round.round_id;
+        let round_id_bytes = round_id.to_le_bytes();
+        let seeds = &[
+            b"mint_authority".as_ref(),
+            round_id_bytes.as_ref(),
+            &[ctx.bumps.mint_authority],
+        ];
+        let signer_seeds = &[&seeds[..]];
+
+        let cpi_accounts = token_2022::MintTo {
+            mint: ctx.accounts.mint.to_account_info(),
+            to: ctx.accounts.token_vault.to_account_info(),
+            authority: ctx.accounts.mint_authority.to_account_info(),
+        };
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            cpi_accounts,
+            signer_seeds,
+        );
+        token_2022::mint_to(cpi_ctx, amount)?;
+
+        emit!(PoolTokensDeposited {
+            round_id,
+            amount,
+        });
+
+        Ok(())
+    }
+
     /// Sync pool reserves from actual token vault balance
     /// Call this after depositing tokens to update the pool state
     pub fn sync_pool_reserves(ctx: Context<SyncPoolReserves>) -> Result<()> {
@@ -1205,74 +1254,8 @@ pub mod boom {
         Ok(())
     }
 
-    /// Trigger explosion with Pyth price verification
-    /// Verifies that current market cap >= revealed cap using Pyth oracle
-    pub fn trigger_explosion_with_pyth(
-        ctx: Context<TriggerExplosionWithPyth>,
-        revealed_cap: u64,
-    ) -> Result<()> {
-        let explosion = &mut ctx.accounts.presale_explosion;
-        let presale_token = &ctx.accounts.presale_token;
-        let lp_info = &ctx.accounts.lp_info;
-        let price_update = &ctx.accounts.price_update;
-
-        require!(!explosion.is_exploded, BoomError::AlreadyExploded);
-
-        // Verify the revealed cap matches the committed hash
-        let computed_hash = hash(&revealed_cap.to_le_bytes());
-        require!(computed_hash.to_bytes() == explosion.cap_hash, BoomError::InvalidCapReveal);
-
-        // Get SOL/USD price from Pyth (max 60 seconds old)
-        // SOL/USD feed ID on mainnet: 0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d
-        // For devnet, we'll use a test feed
-        let sol_usd_feed_id: [u8; 32] = [
-            0xef, 0x0d, 0x8b, 0x6f, 0xda, 0x2c, 0xeb, 0xa4,
-            0x1d, 0xa1, 0x5d, 0x40, 0x95, 0xd1, 0xda, 0x39,
-            0x2a, 0x0d, 0x2f, 0x8e, 0xd0, 0xc6, 0xc7, 0xbc,
-            0x0f, 0x4c, 0xfa, 0xc8, 0xc2, 0x80, 0xb5, 0x6d,
-        ];
-
-        let clock = Clock::get()?;
-        let max_age: u64 = 60; // 60 seconds
-
-        let sol_price = price_update
-            .get_price_no_older_than(&clock, max_age, &sol_usd_feed_id)
-            .map_err(|_| BoomError::PriceStale)?;
-
-        // sol_price.price is in units of 10^exponent USD
-        // Typically exponent is -8, so price of 15000000000 means $150
-        let sol_usd_price = sol_price.price as u64; // Price with exponent
-        let exponent = sol_price.exponent; // Usually -8
-
-        // Calculate token price from LP reserves
-        // token_price_in_sol = sol_reserves / token_reserves
-        // We need LP vault balances for this (passed as accounts)
-        
-        // For now, we verify the cap was revealed correctly
-        // Full market cap calculation would require LP vault account data
-        
-        // Market cap = (token_supply * token_price_in_sol * sol_price_usd)
-        // Since we verified the hash, we trust the revealed_cap
-        // In production, we'd calculate actual market cap from LP state
-
-        explosion.is_exploded = true;
-        explosion.revealed_cap = revealed_cap;
-        explosion.explosion_time = clock.unix_timestamp;
-        explosion.explosion_reason = ExplosionReason::CapHit;
-
-        emit!(PresaleExplosionTriggered {
-            round_id: explosion.round_id,
-            reason: ExplosionReason::CapHit,
-            revealed_cap: Some(revealed_cap),
-        });
-
-        emit!(PythPriceUsed {
-            sol_usd_price,
-            exponent,
-        });
-
-        Ok(())
-    }
+    // NOTE: trigger_explosion_with_pyth temporarily removed to reduce binary size
+    // Will be re-added post-hackathon with pyth-solana-receiver-sdk
 
     /// Trigger explosion due to time limit
     /// Anyone can call this once the deadline passes
@@ -1403,12 +1386,27 @@ pub mod boom {
 
         require!(payout_amount > 0, BoomError::PayoutTooSmall);
 
-        // Transfer SOL from payout vault to user
-        let payout_vault = &ctx.accounts.payout_vault;
-        let user = &ctx.accounts.user;
+        // Transfer SOL from sol_vault to user using CPI with PDA signer
+        let pool = &ctx.accounts.pool;
+        let round_id = explosion.round_id;
+        let sol_vault_bump = pool.sol_vault_bump;
+        let round_id_bytes = round_id.to_le_bytes();
+        let seeds = &[
+            b"sol_vault".as_ref(),
+            round_id_bytes.as_ref(),
+            &[sol_vault_bump],
+        ];
+        let signer_seeds = &[&seeds[..]];
 
-        **payout_vault.to_account_info().try_borrow_mut_lamports()? -= payout_amount;
-        **user.to_account_info().try_borrow_mut_lamports()? += payout_amount;
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.system_program.to_account_info(),
+            anchor_lang::system_program::Transfer {
+                from: ctx.accounts.sol_vault.to_account_info(),
+                to: ctx.accounts.user.to_account_info(),
+            },
+            signer_seeds,
+        );
+        anchor_lang::system_program::transfer(cpi_ctx, payout_amount)?;
 
         // Burn user's tokens
         let burn_accounts = token_2022::Burn {
@@ -1679,7 +1677,6 @@ pub struct MarkWinner<'info> {
 #[derive(Accounts)]
 pub struct ClaimRefund<'info> {
     #[account(
-        mut,
         seeds = [b"presale", presale_round.round_id.to_le_bytes().as_ref()],
         bump = presale_round.bump
     )]
@@ -1699,8 +1696,27 @@ pub struct ClaimRefund<'info> {
         has_one = depositor
     )]
     pub user_deposit: Account<'info, UserDeposit>,
+
+    /// Pool account - needed for sol_vault_bump
+    #[account(
+        seeds = [b"pool", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = pool.bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    /// Pool's SOL vault - refunds come from here since create_pool drained presale
+    /// CHECK: PDA holding SOL
+    #[account(
+        mut,
+        seeds = [b"sol_vault", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = pool.sol_vault_bump
+    )]
+    pub sol_vault: UncheckedAccount<'info>,
+
     #[account(mut)]
     pub depositor: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -2158,6 +2174,49 @@ pub struct DepositPoolTokens<'info> {
     pub token_program: Program<'info, Token2022>,
 }
 
+#[derive(Accounts)]
+pub struct MintPoolTokens<'info> {
+    #[account(
+        seeds = [b"presale", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = presale_round.bump,
+        has_one = authority
+    )]
+    pub presale_round: Account<'info, PresaleRound>,
+
+    #[account(
+        seeds = [b"presale_token", presale_round.round_id.to_le_bytes().as_ref()],
+        bump = presale_token.bump,
+        constraint = presale_token.mint == mint.key() @ BoomError::InvalidMint
+    )]
+    pub presale_token: Account<'info, PresaleToken>,
+
+    /// The token mint
+    #[account(mut)]
+    pub mint: InterfaceAccount<'info, MintInterface>,
+
+    /// PDA mint authority
+    /// CHECK: PDA validated by seeds
+    #[account(
+        seeds = [b"mint_authority", presale_round.round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub mint_authority: UncheckedAccount<'info>,
+
+    /// Token vault PDA
+    #[account(
+        mut,
+        token::mint = mint,
+        seeds = [b"token_vault", presale_round.round_id.to_le_bytes().as_ref()],
+        bump
+    )]
+    pub token_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub token_program: Program<'info, Token2022>,
+}
+
 // ==================== PRESALE EXPLOSION CONTEXTS ====================
 
 #[derive(Accounts)]
@@ -2218,33 +2277,7 @@ pub struct TriggerPresaleExplosion<'info> {
     pub trigger_authority: Signer<'info>,
 }
 
-#[derive(Accounts)]
-pub struct TriggerExplosionWithPyth<'info> {
-    #[account(
-        mut,
-        seeds = [b"presale_explosion", presale_explosion.round_id.to_le_bytes().as_ref()],
-        bump = presale_explosion.bump
-    )]
-    pub presale_explosion: Account<'info, PresaleExplosion>,
-
-    #[account(
-        seeds = [b"presale_token", presale_explosion.round_id.to_le_bytes().as_ref()],
-        bump = presale_token.bump
-    )]
-    pub presale_token: Account<'info, PresaleToken>,
-
-    #[account(
-        seeds = [b"lp_info", presale_explosion.round_id.to_le_bytes().as_ref()],
-        bump = lp_info.bump
-    )]
-    pub lp_info: Account<'info, LpInfo>,
-
-    /// Pyth price update account
-    pub price_update: Account<'info, PriceUpdateV2>,
-
-    /// Anyone can trigger if price threshold met
-    pub caller: Signer<'info>,
-}
+// TriggerExplosionWithPyth context temporarily removed (Pyth dependency stripped for binary size)
 
 #[derive(Accounts)]
 pub struct TriggerPresaleExplosionTime<'info> {
@@ -2260,7 +2293,7 @@ pub struct TriggerPresaleExplosionTime<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(total_sol_extracted: u64, remaining_token_supply: u64)]
+#[instruction(total_sol_extracted: u64)]
 pub struct UnwindLp<'info> {
     #[account(
         seeds = [b"presale", presale_round.round_id.to_le_bytes().as_ref()],
@@ -2328,14 +2361,21 @@ pub struct ClaimExplosionPayout<'info> {
     )]
     pub payout_pool: Account<'info, PayoutPool>,
 
-    /// Vault holding SOL for payouts
-    /// CHECK: PDA that holds the extracted SOL
+    /// Pool account - needed for sol_vault_bump
+    #[account(
+        seeds = [b"pool", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump = pool.bump
+    )]
+    pub pool: Account<'info, Pool>,
+
+    /// SOL vault - holds SOL for payouts
+    /// CHECK: PDA holding SOL
     #[account(
         mut,
-        seeds = [b"payout_vault", presale_explosion.round_id.to_le_bytes().as_ref()],
-        bump
+        seeds = [b"sol_vault", presale_explosion.round_id.to_le_bytes().as_ref()],
+        bump = pool.sol_vault_bump
     )]
-    pub payout_vault: UncheckedAccount<'info>,
+    pub sol_vault: UncheckedAccount<'info>,
 
     /// User's token account
     #[account(
@@ -2691,11 +2731,7 @@ pub struct PayoutClaimed {
     pub amount: u64,
 }
 
-#[event]
-pub struct PythPriceUsed {
-    pub sol_usd_price: u64,
-    pub exponent: i32,
-}
+// PythPriceUsed event temporarily removed (Pyth dependency stripped)
 
 #[event]
 pub struct LpUnwound {
