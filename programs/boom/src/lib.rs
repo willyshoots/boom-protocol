@@ -142,6 +142,7 @@ pub mod boom {
         lottery_spots: u32,
         min_deposit: u64,
         max_deposit: u64,
+        max_winner_contribution: u64,
     ) -> Result<()> {
         let presale = &mut ctx.accounts.presale_round;
         let clock = Clock::get()?;
@@ -153,6 +154,7 @@ pub mod boom {
         presale.lottery_spots = lottery_spots;
         presale.min_deposit = min_deposit;
         presale.max_deposit = max_deposit;
+        presale.max_winner_contribution = max_winner_contribution;
         presale.total_deposited = 0;
         presale.total_depositors = 0;
         presale.is_finalized = false;
@@ -288,12 +290,29 @@ pub mod boom {
         require!(presale.is_finalized, BoomError::PresaleNotFinalized);
         // Trading must have started (explosion timer set) before refunds are available
         require!(explosion.explosion_deadline > 0, BoomError::TradingNotStarted);
-        require!(!user_deposit.is_winner, BoomError::WinnerCannotRefund);
-        require!(!user_deposit.claimed, BoomError::AlreadyClaimed);
         require!(user_deposit.amount > 0, BoomError::NothingToRefund);
 
-        let refund_amount = user_deposit.amount;
-        user_deposit.claimed = true;
+        // Calculate refund amount:
+        // - Losers get full deposit back (check claimed flag)
+        // - Winners get excess over max_winner_contribution (check excess_refunded flag)
+        let refund_amount = if user_deposit.is_winner {
+            require!(!user_deposit.excess_refunded, BoomError::AlreadyClaimed);
+            let max_contrib = presale.max_winner_contribution;
+            if max_contrib > 0 && user_deposit.amount > max_contrib {
+                user_deposit.amount - max_contrib
+            } else {
+                0 // Winner with no excess to refund
+            }
+        } else {
+            require!(!user_deposit.claimed, BoomError::AlreadyClaimed);
+            user_deposit.amount // Loser gets full refund
+        };
+        require!(refund_amount > 0, BoomError::NothingToRefund);
+        if user_deposit.is_winner {
+            user_deposit.excess_refunded = true;
+        } else {
+            user_deposit.claimed = true;
+        }
 
         // Transfer SOL from sol_vault PDA back to user using CPI with PDA signer
         let round_id = presale.round_id;
@@ -315,6 +334,10 @@ pub mod boom {
             signer_seeds,
         );
         anchor_lang::system_program::transfer(cpi_ctx, refund_amount)?;
+
+        // Reduce pool's sol_reserve to keep it in sync with actual available liquidity
+        let pool = &mut ctx.accounts.pool;
+        pool.sol_reserve = pool.sol_reserve.saturating_sub(refund_amount);
 
         emit!(RefundClaimed {
             round_id: presale.round_id,
@@ -526,8 +549,6 @@ pub mod boom {
         // For now, allow 0 tokens and set reserve from what's available
         let token_vault = &ctx.accounts.token_vault;
         let token_reserve = token_vault.amount;
-        // Allow pool creation with 0 tokens - tokens deposited later via deposit_pool_tokens
-        // require!(token_reserve > 0, BoomError::NoTokensForPool);
 
         // Initialize pool state
         let pool = &mut ctx.accounts.pool;
@@ -535,6 +556,8 @@ pub mod boom {
         pool.mint = ctx.accounts.mint.key();
         pool.token_vault = ctx.accounts.token_vault.key();
         pool.sol_vault = ctx.accounts.sol_vault.key();
+        // sol_reserve will be set by sync_pool_reserves after refunds are claimed
+        // For now, set to total transferred (includes refundable amounts)
         pool.sol_reserve = transferable_sol;
         pool.token_reserve = token_reserve;
         pool.fee_bps = fee_bps;
@@ -1715,8 +1738,9 @@ pub struct ClaimRefund<'info> {
     )]
     pub user_deposit: Account<'info, UserDeposit>,
 
-    /// Pool account - needed for sol_vault_bump
+    /// Pool account - needed for sol_vault_bump + updating sol_reserve
     #[account(
+        mut,
         seeds = [b"pool", presale_round.round_id.to_le_bytes().as_ref()],
         bump = pool.bump
     )]
@@ -2529,6 +2553,7 @@ pub struct PresaleRound {
     pub lottery_spots: u32,         // 4
     pub min_deposit: u64,           // 8
     pub max_deposit: u64,           // 8
+    pub max_winner_contribution: u64, // 8 - max SOL per winner that goes to pool (0 = no limit)
     pub total_deposited: u64,       // 8
     pub total_depositors: u32,      // 4
     pub is_finalized: bool,         // 1
@@ -2543,7 +2568,8 @@ pub struct UserDeposit {
     pub amount: u64,                // 8
     pub deposit_time: i64,          // 8
     pub is_winner: bool,            // 1
-    pub claimed: bool,              // 1
+    pub claimed: bool,              // 1 - tokens claimed (winners) or refund claimed (losers)
+    pub excess_refunded: bool,      // 1 - winner's excess over max_winner_contribution refunded
     pub bump: u8,                   // 1
 }
 

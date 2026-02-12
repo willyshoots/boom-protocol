@@ -1,9 +1,10 @@
 /**
- * BOOM Protocol - E2E Test 2: All Winners
+ * BOOM Protocol - Live Test 3: Real People Test
  * 
- * 3 wallets deposit, all 3 win, all 3 claim tokens,
- * at least one does buy/sell swaps, all 3 claim explosion payout.
- * No losers.
+ * 3 depositors, 2 winners, 1 loser
+ * Winners get 5% tokens each (10% total), 90% to pool
+ * Max 0.5 SOL per winner goes to pool, excess refunded
+ * 10 min presale, 10 min explosion timer
  */
 
 import {
@@ -44,11 +45,11 @@ const keypairData = JSON.parse(fs.readFileSync(KEYPAIR_PATH, 'utf-8'));
 const mainWallet = Keypair.fromSecretKey(new Uint8Array(keypairData));
 
 const ROUND_ID = Math.floor(Date.now() / 1000);
-const COOLDOWN_SECONDS = 30;
-const EXPLOSION_DURATION = 60;
+const COOLDOWN_SECONDS = 30; // 10 minutes
+const EXPLOSION_DURATION = 60; // 10 minutes
 
-const TOKEN_NAME = '$TEST2';
-const TOKEN_SYMBOL = 'TEST2';
+const TOKEN_NAME = '$TEST3';
+const TOKEN_SYMBOL = 'TEST3';
 const TOKEN_URI = '';
 
 function disc(name: string): Buffer {
@@ -92,7 +93,7 @@ function skip(step: string, detail: string) {
 async function main() {
   const connection = new Connection(RPC_URL, 'confirmed');
 
-  console.log('🚀 BOOM Protocol - E2E Test 2: All Winners ($TEST2)');
+  console.log('🚀 BOOM Protocol - Live Test 3: 2 Winners 1 Loser ($TEST3)');
   console.log('====================================================');
   console.log(`Round ID: ${ROUND_ID}`);
   console.log(`Main Wallet: ${mainWallet.publicKey.toBase58()}`);
@@ -126,11 +127,11 @@ async function main() {
       fundTx.add(SystemProgram.transfer({
         fromPubkey: mainWallet.publicKey,
         toPubkey: w.kp.publicKey,
-        lamports: 0.3 * LAMPORTS_PER_SOL,
+        lamports: 0.8 * LAMPORTS_PER_SOL, // enough for 0.7 SOL deposit + tx fees
       }));
     }
     await sendWithTimeout(connection, fundTx, [mainWallet]);
-    pass('Fund test wallets', '0.3 SOL each to A, B, C');
+    pass('Fund test wallets', '0.8 SOL each to A, B, C');
     for (const w of wallets) {
       startBalances[w.name] = await connection.getBalance(w.kp.publicKey);
     }
@@ -168,10 +169,10 @@ async function main() {
         disc('start_presale'),
         rb,
         new BN(COOLDOWN_SECONDS).toArrayLike(Buffer, 'le', 8),
-        Buffer.from(new Uint32Array([3]).buffer), // lotterySpots = 3
-        new BN(0.05 * LAMPORTS_PER_SOL).toArrayLike(Buffer, 'le', 8),
-        new BN(5 * LAMPORTS_PER_SOL).toArrayLike(Buffer, 'le', 8),
-        new BN(0).toArrayLike(Buffer, 'le', 8), // maxWinnerContribution (0 = no limit)
+        Buffer.from(new Uint32Array([2]).buffer), // lotterySpots = 2 (out of 3 depositors)
+        new BN(0.5 * LAMPORTS_PER_SOL).toArrayLike(Buffer, 'le', 8), // minDeposit = 0.5 SOL
+        new BN(100 * LAMPORTS_PER_SOL).toArrayLike(Buffer, 'le', 8), // maxDeposit = 100 SOL (effectively no limit)
+        new BN(0.5 * LAMPORTS_PER_SOL).toArrayLike(Buffer, 'le', 8), // maxWinnerContribution = 0.5 SOL
       ]),
     });
     const sig = await sendWithTimeout(connection, new Transaction().add(ix), [mainWallet]);
@@ -184,7 +185,7 @@ async function main() {
 
   // ============ STEP 2: Deposits from all 3 ============
   console.log('\n📝 STEP 2: Deposits (A, B, C)');
-  const depositAmount = new BN(0.1 * LAMPORTS_PER_SOL);
+  const depositAmount = new BN(0.7 * LAMPORTS_PER_SOL); // 0.7 SOL each (winners get 0.2 SOL excess refunded)
   for (let i = 0; i < wallets.length; i++) {
     const { name, kp } = wallets[i];
     try {
@@ -210,8 +211,8 @@ async function main() {
   console.log(`\n⏳ Waiting ${COOLDOWN_SECONDS + 5}s for presale cooldown...`);
   await sleep((COOLDOWN_SECONDS + 5) * 1000);
 
-  // ============ STEP 4: End Presale + Lottery (all 3 win) ============
-  console.log('\n📝 STEP 3: End Presale + Lottery (all 3 winners)');
+  // ============ STEP 4: End Presale + Lottery (2 winners) ============
+  console.log('\n📝 STEP 3: End Presale + Lottery (2 winners out of 3)');
   try {
     const ix = new TransactionInstruction({
       keys: [
@@ -221,10 +222,9 @@ async function main() {
       programId: BOOM_PROGRAM_ID,
       data: Buffer.concat([
         disc('end_presale_and_lottery'),
-        Buffer.from(new Uint32Array([3]).buffer), // vec length = 3
-        Buffer.from(new Uint32Array([0]).buffer), // winner index 0
-        Buffer.from(new Uint32Array([1]).buffer), // winner index 1
-        Buffer.from(new Uint32Array([2]).buffer), // winner index 2
+        Buffer.from(new Uint32Array([2]).buffer), // vec length = 2 (2 winners)
+        Buffer.from(new Uint32Array([0]).buffer), // winner index 0 (Wallet A)
+        Buffer.from(new Uint32Array([1]).buffer), // winner index 1 (Wallet B)
       ]),
     });
     const sig = await sendWithTimeout(connection, new Transaction().add(ix), [mainWallet]);
@@ -234,9 +234,11 @@ async function main() {
   }
   await sleep(DELAY_MS);
 
-  // ============ STEP 5: Mark all 3 as winners ============
-  console.log('\n📝 STEP 4: Mark Winners (all 3)');
-  for (let i = 0; i < wallets.length; i++) {
+  // ============ STEP 5: Mark 2 winners (A and B win, C loses) ============
+  console.log('\n📝 STEP 4: Mark Winners (A and B only — C is the loser)');
+  const winnerIndices = [0, 1]; // Wallet A and B
+  const loserIndex = 2; // Wallet C
+  for (const i of winnerIndices) {
     const { name } = wallets[i];
     try {
       const ix = new TransactionInstruction({
@@ -255,9 +257,10 @@ async function main() {
     }
     await sleep(DELAY_MS);
   }
+  console.log(`  ℹ️  ${wallets[loserIndex].name} is the loser (not marked as winner)`);
 
   // ============ STEP 6: Create Token2022 with transfer hook ============
-  console.log('\n📝 STEP 5: Create Token2022 ($TEST2) with transfer hook');
+  console.log('\n📝 STEP 5: Create Token2022 ($TEST3) with transfer hook');
   const mintKeypair = Keypair.generate();
   const mint = mintKeypair.publicKey;
   console.log(`  Mint: ${mint.toBase58()}`);
@@ -295,9 +298,9 @@ async function main() {
       createSetAuthorityInstruction(mint, mainWallet.publicKey, AuthorityType.MintTokens, mintAuthorityPda, [], TOKEN_2022_PROGRAM_ID),
     );
     const sig3 = await sendWithTimeout(connection, tx3, [mainWallet]);
-    pass('Create Token2022 ($TEST2)', sig3.slice(0, 20) + '...');
+    pass('Create Token2022 ($TEST3)', sig3.slice(0, 20) + '...');
   } catch (e: any) {
-    fail('Create Token2022 ($TEST2)', e.message?.slice(0, 200));
+    fail('Create Token2022 ($TEST3)', e.message?.slice(0, 200));
     if (e.logs) console.log('  Logs:', e.logs.filter((l: string) => l.includes('Error') || l.includes('failed')).slice(0, 3));
   }
   await sleep(DELAY_MS);
@@ -341,7 +344,7 @@ async function main() {
   // ============ STEP 7: Register Presale Token ============
   console.log('\n📝 STEP 7: Register Presale Token');
   const totalSupply = new BN(1_000_000_000).mul(new BN(10).pow(new BN(9)));
-  const tokensPerWinner = new BN(100_000_000).mul(new BN(10).pow(new BN(9)));
+  const tokensPerWinner = new BN(50_000_000).mul(new BN(10).pow(new BN(9))); // 5% each = 50M tokens
   try {
     const ix = new TransactionInstruction({
       keys: [
@@ -454,13 +457,18 @@ async function main() {
   }
   await sleep(DELAY_MS);
 
-  // ============ STEP 12: All 3 claim tokens ============
-  console.log('\n📝 STEP 12: All 3 claim winner tokens');
+  // ============ STEP 12: Winners claim tokens (A and B only) ============
+  console.log('\n📝 STEP 12: Winners claim tokens (A and B)');
   const walletAtas: PublicKey[] = [];
   for (let i = 0; i < wallets.length; i++) {
     const { name, kp } = wallets[i];
     const ata = getAssociatedTokenAddressSync(mint, kp.publicKey, false, TOKEN_2022_PROGRAM_ID);
     walletAtas.push(ata);
+
+    if (!winnerIndices.includes(i)) {
+      console.log(`  ⏭️  ${name} is a loser — skipping token claim`);
+      continue;
+    }
 
     // Create ATA
     try {
@@ -502,11 +510,44 @@ async function main() {
     await sleep(DELAY_MS);
   }
 
+  // ============ STEP 12b: All wallets claim refunds ============
+  // Loser C gets full refund (0.7 SOL)
+  // Winners A & B get excess refund (0.7 - 0.5 = 0.2 SOL each)
+  console.log('\n📝 STEP 12b: Claim refunds (loser=full, winners=excess)');
+  for (let i = 0; i < wallets.length; i++) {
+    const { name, kp } = wallets[i];
+    const expectedRefund = winnerIndices.includes(i) ? '~0.2 SOL (excess)' : '~0.7 SOL (full)';
+    try {
+      const balBefore = await connection.getBalance(kp.publicKey);
+      const ix = new TransactionInstruction({
+        keys: [
+          { pubkey: presalePda, isSigner: false, isWritable: false },
+          { pubkey: explosionPda, isSigner: false, isWritable: false },
+          { pubkey: depositPdas[i], isSigner: false, isWritable: true },
+          { pubkey: poolPda, isSigner: false, isWritable: true },
+          { pubkey: solVaultPda, isSigner: false, isWritable: true },
+          { pubkey: kp.publicKey, isSigner: true, isWritable: true },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        programId: BOOM_PROGRAM_ID,
+        data: disc('claim_refund'),
+      });
+      const sig = await sendWithTimeout(connection, new Transaction().add(ix), [kp]);
+      const balAfter = await connection.getBalance(kp.publicKey);
+      const refunded = (balAfter - balBefore + 5000) / LAMPORTS_PER_SOL;
+      pass(`${name} claims refund`, `+${refunded.toFixed(4)} SOL (expected ${expectedRefund}), ${sig.slice(0, 20)}...`);
+    } catch (e: any) {
+      fail(`${name} claims refund`, e.message?.slice(0, 150));
+      if (e.logs) console.log('  Logs:', e.logs.filter((l: string) => l.includes('Error') || l.includes('failed') || l.includes('custom')).slice(0, 3));
+    }
+    await sleep(DELAY_MS);
+  }
+
   // ============ STEP 13: Mint pool tokens + sync ============
   console.log('\n📝 STEP 13: Mint pool tokens + sync');
   let poolHasTokens = false;
   try {
-    const POOL_TOKEN_AMOUNT = new BN(500_000_000).mul(new BN(10).pow(new BN(9)));
+    const POOL_TOKEN_AMOUNT = new BN(900_000_000).mul(new BN(10).pow(new BN(9))); // 90% to pool
     const ix = new TransactionInstruction({
       keys: [
         { pubkey: presalePda, isSigner: false, isWritable: false },
@@ -671,9 +712,9 @@ async function main() {
   }
   await sleep(DELAY_MS);
 
-  // ============ STEP 19: All 3 claim explosion payout ============
-  console.log('\n📝 STEP 18: All 3 claim explosion payout');
-  for (let i = 0; i < wallets.length; i++) {
+  // ============ STEP 19: Winners claim explosion payout ============
+  console.log('\n📝 STEP 18: Winners claim explosion payout (A and B only)');
+  for (const i of winnerIndices) {
     const { name, kp } = wallets[i];
     const balBefore = await connection.getBalance(kp.publicKey);
     try {
@@ -705,7 +746,7 @@ async function main() {
 
   // ============ FINAL REPORT ============
   console.log('\n\n🏁 ====================================================');
-  console.log('   E2E TEST 2 RESULTS ($TEST2 - All Winners)');
+  console.log('   E2E TEST 2 RESULTS ($TEST3 - 2 Winners 1 Loser)');
   console.log('====================================================\n');
 
   const passed = results.filter(r => r.status === 'PASS').length;

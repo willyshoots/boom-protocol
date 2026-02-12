@@ -191,6 +191,7 @@ async function main() {
         Buffer.from(new Uint32Array([10]).buffer), // lotterySpots
         new BN(0.05 * LAMPORTS_PER_SOL).toArrayLike(Buffer, 'le', 8), // minDeposit
         new BN(5 * LAMPORTS_PER_SOL).toArrayLike(Buffer, 'le', 8), // maxDeposit
+        new BN(0).toArrayLike(Buffer, 'le', 8), // maxWinnerContribution (0 = no limit)
       ]),
     });
     const sig = await sendWithTimeout(connection, new Transaction().add(ix), [mainWallet]);
@@ -604,7 +605,7 @@ async function main() {
         { pubkey: presalePda, isSigner: false, isWritable: false },
         { pubkey: explosionPda, isSigner: false, isWritable: false },
         { pubkey: loserDepositPda, isSigner: false, isWritable: true },
-        { pubkey: poolPda, isSigner: false, isWritable: false },
+        { pubkey: poolPda, isSigner: false, isWritable: true },
         { pubkey: solVaultPda, isSigner: false, isWritable: true },
         { pubkey: loserWallet.publicKey, isSigner: true, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
